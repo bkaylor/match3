@@ -7,9 +7,9 @@
 
 
 // TODO(bkaylor): Grid size and timer should be selectable.
-#define GRID_X 6
-#define GRID_Y 5
-#define RESET_SECONDS 10 
+#define GRID_X 4
+#define GRID_Y 4
+#define RESET_SECONDS 600
 
 // TODO(bkaylor): Shapes?
 typedef enum {
@@ -50,6 +50,7 @@ typedef struct {
     int x;
     int y;
     int active;
+    Symbol *symbol;
 } Selection_Info;
 
 typedef struct {
@@ -131,6 +132,13 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
         sprintf(hovered_string, "nothing hovered");
     }
 
+    char selected_string[20];
+    if (game_state->selected->active) {
+        sprintf(selected_string, "%d, %d selected", game_state->selected->x, game_state->selected->y);
+    } else {
+        sprintf(selected_string, "nothing selected");
+    }
+
     // Score
     SDL_Surface *score_surface = TTF_RenderText_Solid(font, score_string, font_color);
     SDL_Texture *score_texture = SDL_CreateTextureFromSurface(renderer, score_surface);
@@ -158,43 +166,69 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
 
     SDL_RenderCopy(renderer, hovered_texture, NULL, &hovered_rect);
 
+    // Selected 
+    SDL_Surface *selected_surface = TTF_RenderText_Solid(font, selected_string, font_color);
+    SDL_Texture *selected_texture = SDL_CreateTextureFromSurface(renderer, selected_surface);
+    int selected_x, selected_y;
+    SDL_QueryTexture(selected_texture, NULL, NULL, &selected_x, &selected_y);
+    SDL_Rect selected_rect = {5 , 5 + 30, selected_x, selected_y};
+
+    SDL_RenderCopy(renderer, selected_texture, NULL, &selected_rect);
+
     // Show
     SDL_RenderPresent(renderer);
 }
 
 void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_position, int x_increment, int y_increment)
 {
-    int x_delta = 0, y_delta = 0;
-    x_delta += x_increment; 
-    y_delta += y_increment;
+    int match_found = 0;
+    int match_length = 1;
 
-    int length = 1;
+    // Find length match in the (x_increment, y_increment) direction.
+    {
+        int i = starting_position.x + x_increment;
+        int j = starting_position.y + y_increment;
 
-    int i = starting_position.x;
-    int j = starting_position.y;
+        while ((i < GRID_X) && (j < GRID_Y) && (i >= 0) && (j >= 0) && 
+               // (!grid[i][j].popped) &&
+               (grid[i][j].color == grid[starting_position.x][starting_position.y].color)) {
+            match_length++;
 
-    int match = 0;
-    while ((i + x_delta < GRID_X) && (j + y_delta < GRID_Y) && 
-           (i + x_delta >= 0) && (j + y_delta >= 0) && 
-           (!grid[i][j].popped) &&
-           (grid[i][j].color == grid[i + x_delta][j + y_delta].color)) {
-        x_delta += x_increment;
-        y_delta += y_increment;
-        length++;
+            if (match_length >= 3) {
+                match_found = 1;
+            }
 
-        if (length >= 3) {
-            match = 1;
-            grid[i + x_delta][j + y_delta].matched = 1;
+            i += x_increment;
+            j += y_increment;
         }
     }
 
-    if (match) {
-        grid[starting_position.x][starting_position.y].matched = 1;
-        grid[starting_position.x + x_increment][starting_position.y + y_increment].matched = 1;
+    // Build the list of matched symbols.
+    // TODO(bkaylor): What should the size of the match_list array actually be?
+    Symbol *match_list[10];
+    if (match_found) {
+        int i = starting_position.x;
+        int j = starting_position.y;
+        int k = 0;
+        while (k < match_length) {
+            match_list[k] = &grid[i][j];
+
+            grid[i][j].matched = 1;
+            // grid[i][j].matched = 1;
+
+            i += x_increment;
+            j += y_increment;
+            k++;
+        }
     }
 
-    if (match) {
-        printf("match of length %d at (%d,%d)\n", length, starting_position.x, starting_position.y);
+    if (match_found) {
+        printf("match of length %d at (%d,%d)\n", match_length, starting_position.x, starting_position.y);
+        for (int k = 0; k < match_length; k++)
+        {
+            printf("(%d,%d) ", match_list[k]->position.x, match_list[k]->position.y);
+        }
+        printf("\n");
     }
 }
 
@@ -215,6 +249,8 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                 game_state->grid[i][j].position.y = j;
                 game_state->grid[i][j].matched = 0;
                 game_state->grid[i][j].popped = 0;
+                game_state->grid[i][j].hovered = 0;
+                game_state->grid[i][j].selected = 0;
                 printf("%d ", game_state->grid[i][j].color);
             }
 
@@ -229,15 +265,15 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
         game_state->score = 0;
         game_state->need_to_look_for_matches = 1;
         game_state->hovered->active = 0;
+        game_state->selected->active = 0;
     }
 
     // Get sizes of board.
-    game_state->grid_outer_padding = 50;
+    game_state->grid_outer_padding = 60;
     game_state->symbol_width = (game_state->window_w - 2*game_state->grid_outer_padding) / GRID_X; 
     game_state->symbol_height = (game_state->window_h - 2*game_state->grid_outer_padding) / GRID_Y;
 
 
-#if 1
     // TODO(bkaylor): User input.
     // You should be able to click and drag a symbol to an adjacent spot to swap them.
     // Process player move.
@@ -259,40 +295,53 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
 
     if ((0 <= game_state->hovered->x && game_state->hovered->x < GRID_X) && 
         (0 <= game_state->hovered->y && game_state->hovered->y < GRID_Y)) {
-        // game_state->grid[game_state->hovered->x][game_state->hovered->y].hovered = 1;
         game_state->hovered->active = 1;
+        game_state->hovered->symbol = &game_state->grid[game_state->hovered->x][game_state->hovered->y];
+        game_state->hovered->symbol->hovered = 1;
     } else {
-        if (game_state->hovered->active == 1) {
-            // game_state->grid[game_state->hovered->x][game_state->hovered->y].hovered = 0;
-            game_state->hovered->active = 0;
+        if (game_state->hovered->active) {
+            game_state->hovered->symbol->hovered = 0;
+        }
+
+        game_state->hovered->active = 0;
+        game_state->hovered->symbol = NULL;
+    }
+
+    // On left click, select the hovered tile.
+    if (game_state->hovered->active && mouse_state->pressed == SDL_BUTTON_LEFT) {
+        if (game_state->selected->active) {
+            // TODO(bkaylor): Swap the tiles.
+        } else {
+            game_state->selected->active = 1;
+            game_state->selected->x = game_state->hovered->x;
+            game_state->selected->y = game_state->hovered->y;
+            game_state->selected->symbol = game_state->hovered->symbol;
+            game_state->selected->symbol->selected = 1;
         }
     }
-#endif
+
+    // On right click, unselect.
+    if (game_state->selected->active && mouse_state->pressed == SDL_BUTTON_RIGHT) {
+        if (game_state->selected->active) {
+            game_state->selected->active = 0;
+            game_state->selected->symbol = NULL;
+        }
+    }
 
     // TODO(bkaylor): Exceptions coming from here on ~5% of boards.
-#if 0
+#if 1
     // Check for matches.
     if (game_state->need_to_look_for_matches) {
         for (int i = 0; i < GRID_X; i++)
         {
             for (int j = 0; j < GRID_Y; j++)
             {
-                // Up
-                printf("checking up\n");
-                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, 1);
-                printf("checked up\n");
-                // Down
-                printf("checking down\n");
-                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, -1);
-                printf("checked down\n");
-                // Left
-                printf("checking left\n");
-                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, -1, 0);
-                printf("checked left\n");
-                // Right
-                printf("checking right\n");
-                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 1, 0);
-                printf("checked right\n");
+                if (!game_state->grid[i][j].matched) {
+                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, 1);
+                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, -1);
+                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, -1, 0);
+                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 1, 0);
+                }
             }
         }
 

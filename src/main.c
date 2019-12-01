@@ -26,17 +26,47 @@ typedef enum {
 } Color;
 
 typedef struct {
+    int x;
+    int y;
+} Position;
+
+typedef struct {
     Shape shape;
     Color color;
+    Position position;
+    int matched;
+    int popped;
+    int hovered;
+    int selected;
 } Symbol;
 
 typedef struct {
+    int x;
+    int y;
+    int pressed;
+} Mouse_State;
+
+typedef struct {
+    int x;
+    int y;
+    int active;
+} Selection_Info;
+
+typedef struct {
     Symbol grid[GRID_X][GRID_Y];
+    Selection_Info *hovered;
+    Selection_Info *selected;
     int reset;
     int quit;
     int window_w;
     int window_h;
     int timer;
+    int score;
+    int need_to_look_for_matches;
+    int symbol_width;
+    int symbol_height;
+    int grid_outer_padding;
+    int board_count;
 } Game_State;
 
 /*
@@ -49,27 +79,24 @@ typedef struct {
    This assumes that the shapes are touching, flush against each other (might want to add padding later).
 
 */
-void render(SDL_Renderer *renderer, Game_State *game_state)
+void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_Color font_color)
 {
     SDL_RenderClear(renderer);
 
     // Set background color.
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderFillRect(renderer, NULL);
-
-    // Draw shapes.
-
-    int grid_outer_padding = 50;
-
     SDL_Rect rect;
-    rect.w = (game_state->window_w - 2*grid_outer_padding) / GRID_X;
-    rect.h = (game_state->window_h - 2*grid_outer_padding) / GRID_Y;
+    rect.w = game_state->symbol_width;
+    rect.h = game_state->symbol_height;
 
     for (int i = 0; i < GRID_X; i++)
     {
         for (int j = 0; j < GRID_Y; j++)
         {
             Symbol symbol = game_state->grid[i][j];
+
+            if (symbol.popped) { continue; }
 
             // r g b (255)
             if (symbol.color == GREEN) {
@@ -84,126 +111,208 @@ void render(SDL_Renderer *renderer, Game_State *game_state)
                 SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
             }
 
-            rect.x = i * rect.w + grid_outer_padding;
-            rect.y = j * rect.h + grid_outer_padding;
+            rect.x = i * rect.w + game_state->grid_outer_padding;
+            rect.y = j * rect.h + game_state->grid_outer_padding;
 
             // Draw the rect.
             SDL_RenderFillRect(renderer, &rect);
         }
     }
 
-    // TODO(bkaylor): UI! Print the count of symbols popped and the timer in seconds.
+    // UI
+    char score_string[10];
+    sprintf(score_string, "%dpts", game_state->score);
+    char timer_string[10];
+    sprintf(timer_string, "%dms", game_state->timer);
+    char hovered_string[20];
+    if (game_state->hovered->active) {
+        sprintf(hovered_string, "%d, %d hovered", game_state->hovered->x, game_state->hovered->y);
+    } else {
+        sprintf(hovered_string, "nothing hovered");
+    }
 
+    // Score
+    SDL_Surface *score_surface = TTF_RenderText_Solid(font, score_string, font_color);
+    SDL_Texture *score_texture = SDL_CreateTextureFromSurface(renderer, score_surface);
+    int score_x, score_y;
+    SDL_QueryTexture(score_texture, NULL, NULL, &score_x, &score_y);
+    SDL_Rect score_rect = {5 , 5, score_x, score_y};
+
+    SDL_RenderCopy(renderer, score_texture, NULL, &score_rect);
+
+    // Timer
+    SDL_Surface *timer_surface = TTF_RenderText_Solid(font, timer_string, font_color);
+    SDL_Texture *timer_texture = SDL_CreateTextureFromSurface(renderer, timer_surface);
+    int timer_x, timer_y;
+    SDL_QueryTexture(timer_texture, NULL, NULL, &timer_x, &timer_y);
+    SDL_Rect timer_rect = {5 , 5 + 10, timer_x, timer_y};
+
+    SDL_RenderCopy(renderer, timer_texture, NULL, &timer_rect);
+
+    // Hovered
+    SDL_Surface *hovered_surface = TTF_RenderText_Solid(font, hovered_string, font_color);
+    SDL_Texture *hovered_texture = SDL_CreateTextureFromSurface(renderer, hovered_surface);
+    int hovered_x, hovered_y;
+    SDL_QueryTexture(hovered_texture, NULL, NULL, &hovered_x, &hovered_y);
+    SDL_Rect hovered_rect = {5 , 5 + 20, hovered_x, hovered_y};
+
+    SDL_RenderCopy(renderer, hovered_texture, NULL, &hovered_rect);
+
+    // Show
     SDL_RenderPresent(renderer);
 }
 
-int update(Game_State *game_state) 
+void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_position, int x_increment, int y_increment)
+{
+    int x_delta = 0, y_delta = 0;
+    x_delta += x_increment; 
+    y_delta += y_increment;
+
+    int length = 1;
+
+    int i = starting_position.x;
+    int j = starting_position.y;
+
+    int match = 0;
+    while ((i + x_delta < GRID_X) && (j + y_delta < GRID_Y) && 
+           (i + x_delta >= 0) && (j + y_delta >= 0) && 
+           (!grid[i][j].popped) &&
+           (grid[i][j].color == grid[i + x_delta][j + y_delta].color)) {
+        x_delta += x_increment;
+        y_delta += y_increment;
+        length++;
+
+        if (length >= 3) {
+            match = 1;
+            grid[i + x_delta][j + y_delta].matched = 1;
+        }
+    }
+
+    if (match) {
+        grid[starting_position.x][starting_position.y].matched = 1;
+        grid[starting_position.x + x_increment][starting_position.y + y_increment].matched = 1;
+    }
+
+    if (match) {
+        printf("match of length %d at (%d,%d)\n", length, starting_position.x, starting_position.y);
+    }
+}
+
+int update(Game_State *game_state, Mouse_State *mouse_state) 
 {
     // Reset the board if needed.
     if (game_state->reset) {
+        game_state->board_count++;
+        printf("**********\n");
+        printf("Board %d\n", game_state->board_count);
         for (int i = 0; i < GRID_X; i++)
         {
             for (int j = 0; j < GRID_Y; j++)
             {
                 game_state->grid[i][j].color = rand() % 5; 
                 game_state->grid[i][j].shape = rand() % 1;
+                game_state->grid[i][j].position.x = i;
+                game_state->grid[i][j].position.y = j;
+                game_state->grid[i][j].matched = 0;
+                game_state->grid[i][j].popped = 0;
                 printf("%d ", game_state->grid[i][j].color);
             }
 
             printf("\n");
         }
 
+        printf("**********\n");
         printf("\n");
 
         game_state->timer = RESET_SECONDS * 1000;
         game_state->reset = 0;
+        game_state->score = 0;
+        game_state->need_to_look_for_matches = 1;
+        game_state->hovered->active = 0;
     }
 
+    // Get sizes of board.
+    game_state->grid_outer_padding = 50;
+    game_state->symbol_width = (game_state->window_w - 2*game_state->grid_outer_padding) / GRID_X; 
+    game_state->symbol_height = (game_state->window_h - 2*game_state->grid_outer_padding) / GRID_Y;
+
+
+#if 1
     // TODO(bkaylor): User input.
     // You should be able to click and drag a symbol to an adjacent spot to swap them.
     // Process player move.
 
+    // Since everything is an integer, we need to do some special case around zero when 
+    // the mouse is off the grid.
+    int grid_mouse_state_x = (mouse_state->x - game_state->grid_outer_padding);
+    int grid_mouse_state_y = (mouse_state->y - game_state->grid_outer_padding);
+    if (grid_mouse_state_x > 0) {
+        game_state->hovered->x = (grid_mouse_state_x) / game_state->symbol_width; 
+    } else {
+        game_state->hovered->x = -1;
+    }
+    if (grid_mouse_state_y > 0) {
+        game_state->hovered->y = (grid_mouse_state_y) / game_state->symbol_height; 
+    } else {
+        game_state->hovered->y = -1;
+    }
+
+    if ((0 <= game_state->hovered->x && game_state->hovered->x < GRID_X) && 
+        (0 <= game_state->hovered->y && game_state->hovered->y < GRID_Y)) {
+        // game_state->grid[game_state->hovered->x][game_state->hovered->y].hovered = 1;
+        game_state->hovered->active = 1;
+    } else {
+        if (game_state->hovered->active == 1) {
+            // game_state->grid[game_state->hovered->x][game_state->hovered->y].hovered = 0;
+            game_state->hovered->active = 0;
+        }
+    }
+#endif
+
+    // TODO(bkaylor): Exceptions coming from here on ~5% of boards.
+#if 0
     // Check for matches.
-    for (int i = 0; i < GRID_X; i++)
-    {
-        for (int j = 0; j < GRID_Y; j++)
+    if (game_state->need_to_look_for_matches) {
+        for (int i = 0; i < GRID_X; i++)
         {
-            // TODO(bkaylor): Um, this could use some compression.
-            // Also, it doesn't have to be done every frame ... 
-
-            // TODO(bkaylor): A match should be able to be more than length 3.
-
-            // TODO(bkaylor): Pop symbols when match.
-            // When a match is found, the three symbols should be popped and the pieces above should move down,
-            // and any new needed symbols to keep the grid to GRID_X * GRID_Y should be generated.
-            int x_inc, y_inc, x_del, y_del, length; 
-
-            // Up
-            x_inc = 0;      y_inc = 1;
-            x_del = 0;      y_del = 0;
-            x_del += x_inc; y_del += y_inc;
-            length = 1;
-            while ((i + x_del < GRID_Y) && (j + y_del < GRID_Y) && 
-                   (i + x_del >= 0) && (j + y_del >= 0) && 
-                   (length < 3) &&
-                   (game_state->grid[i][j].color == game_state->grid[i + x_del][j + y_del].color)) {
-                x_del += x_inc;
-                y_del += y_inc;
-                length++;
-                if (length >= 3) {
-                    printf("up match at (%d,%d)\n", i, j);
-                }
+            for (int j = 0; j < GRID_Y; j++)
+            {
+                // Up
+                printf("checking up\n");
+                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, 1);
+                printf("checked up\n");
+                // Down
+                printf("checking down\n");
+                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, -1);
+                printf("checked down\n");
+                // Left
+                printf("checking left\n");
+                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, -1, 0);
+                printf("checked left\n");
+                // Right
+                printf("checking right\n");
+                check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 1, 0);
+                printf("checked right\n");
             }
-            // Down
-            x_inc = 0;      y_inc = -1;
-            x_del = 0;      y_del = 0;
-            x_del += x_inc; y_del += y_inc;
-            length = 1;
-            while ((i + x_del < GRID_Y) && (j + y_del < GRID_Y) && 
-                   (i + x_del >= 0) && (j + y_del >= 0) && 
-                   (length < 3) &&
-                   (game_state->grid[i][j].color == game_state->grid[i + x_del][j + y_del].color)) {
-                x_del += x_inc;
-                y_del += y_inc;
-                length++;
-                if (length >= 3) {
-                    printf("down match at (%d,%d)\n", i, j);
-                }
-            }
-            // Left
-            x_inc = -1;      y_inc = 0;
-            x_del = 0;      y_del = 0;
-            x_del += x_inc; y_del += y_inc;
-            length = 1;
-            while ((i + x_del < GRID_Y) && (j + y_del < GRID_Y) && 
-                   (i + x_del >= 0) && (j + y_del >= 0) && 
-                   (length < 3) &&
-                   (game_state->grid[i][j].color == game_state->grid[i + x_del][j + y_del].color)) {
-                x_del += x_inc;
-                y_del += y_inc;
-                length++;
-                if (length >= 3) {
-                    printf("left match at (%d,%d)\n", i, j);
-                }
-            }
-            // Right
-            x_inc = 1;      y_inc = 0;
-            x_del = 0;      y_del = 0;
-            x_del += x_inc; y_del += y_inc;
-            length = 1;
-            while ((i + x_del < GRID_Y) && (j + y_del < GRID_Y) && 
-                   (i + x_del >= 0) && (j + y_del >= 0) && 
-                   (length < 3) &&
-                   (game_state->grid[i][j].color == game_state->grid[i + x_del][j + y_del].color)) {
-                x_del += x_inc;
-                y_del += y_inc;
-                length++;
-                if (length >= 3) {
-                    printf("right match at (%d,%d)\n", i, j);
+        }
+
+        // TODO(bkaylor): Pop symbols when match.
+        // When a match is found, the three symbols should be popped and the pieces above should move down,
+        // and any new needed symbols to keep the grid to GRID_X * GRID_Y should be generated.
+        for (int i = 0; i < GRID_X; i++)
+        {
+            for (int j = 0; j < GRID_Y; j++)
+            {
+                if (game_state->grid[i][j].matched && !game_state->grid[i][j].popped) {
+                    game_state->grid[i][j].popped = 1;
+                    game_state->score++;
                 }
             }
         }
+
+        game_state->need_to_look_for_matches = 0;
     }
+#endif 
 
     // Reset the board if the timer is up.
     if (game_state->timer < 0) {
@@ -214,8 +323,12 @@ int update(Game_State *game_state)
 }
 
 // TODO(bkaylor): Mouse input
-void get_input(SDL_Renderer *ren, Game_State *game_state)
+void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_state)
 {
+    // Get mouse info.
+    mouse_state->pressed = 0;
+    SDL_GetMouseState(&mouse_state->x, &mouse_state->y);
+
     // Handle events.
     SDL_Event event;
 
@@ -237,6 +350,10 @@ void get_input(SDL_Renderer *ren, Game_State *game_state)
                     default:
                         break;
                 }
+                break;
+
+            case SDL_MOUSEBUTTONDOWN:
+                mouse_state->pressed = event.button.button;
                 break;
 
             case SDL_QUIT:
@@ -287,13 +404,22 @@ int main(int argc, char *argv[])
 		return -666;
 	}
 
+	SDL_Color font_color = {255, 255, 255};
+
     // Setup main loop
     srand(time(NULL));
 
     // Build game state
-    Game_State game_state;
+    Selection_Info hovered = {0};
+    Selection_Info selected = {0};
+    Game_State game_state = {0};
+    game_state.hovered = &hovered;
+    game_state.selected = &selected;
     game_state.reset = 1;
     game_state.quit = 0;
+    game_state.board_count = 0;
+
+    Mouse_State mouse_state = {0};
 
     // Main loop
     const float FPS_INTERVAL = 1.0f;
@@ -304,14 +430,14 @@ int main(int argc, char *argv[])
         frame_time_start = SDL_GetTicks();
 
         SDL_PumpEvents();
-        get_input(ren, &game_state);
+        get_input(ren, &game_state, &mouse_state);
 
         if (!game_state.quit)
         {
             SDL_GetWindowSize(win, &game_state.window_w, &game_state.window_h);
 
-            update(&game_state);
-            render(ren, &game_state);
+            update(&game_state, &mouse_state);
+            render(ren, &game_state, font, font_color);
 
             // Update timers;
             frame_time_finish = SDL_GetTicks();

@@ -7,9 +7,9 @@
 
 
 // TODO(bkaylor): Grid size and timer should be selectable.
-#define GRID_X 4
-#define GRID_Y 4
-#define RESET_SECONDS 600
+#define GRID_X 6
+#define GRID_Y 5
+#define RESET_SECONDS 30 
 
 // TODO(bkaylor): Shapes?
 typedef enum {
@@ -63,6 +63,7 @@ typedef struct {
     int window_h;
     int timer;
     int score;
+    int last_score;
     int need_to_look_for_matches;
     int symbol_width;
     int symbol_height;
@@ -121,8 +122,8 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
     }
 
     // UI
-    char score_string[10];
-    sprintf(score_string, "%dpts", game_state->score);
+    char score_string[20];
+    sprintf(score_string, "%dpts (%d last)", game_state->score, game_state->last_score);
     char timer_string[10];
     sprintf(timer_string, "%dms", game_state->timer);
     char hovered_string[20];
@@ -190,7 +191,7 @@ void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_
         int j = starting_position.y + y_increment;
 
         while ((i < GRID_X) && (j < GRID_Y) && (i >= 0) && (j >= 0) && 
-               // (!grid[i][j].popped) &&
+               (!grid[i][j].popped) &&
                (grid[i][j].color == grid[starting_position.x][starting_position.y].color)) {
             match_length++;
 
@@ -262,6 +263,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
 
         game_state->timer = RESET_SECONDS * 1000;
         game_state->reset = 0;
+        game_state->last_score = game_state->score;
         game_state->score = 0;
         game_state->need_to_look_for_matches = 1;
         game_state->hovered->active = 0;
@@ -273,13 +275,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     game_state->symbol_width = (game_state->window_w - 2*game_state->grid_outer_padding) / GRID_X; 
     game_state->symbol_height = (game_state->window_h - 2*game_state->grid_outer_padding) / GRID_Y;
 
-
-    // TODO(bkaylor): User input.
-    // You should be able to click and drag a symbol to an adjacent spot to swap them.
-    // Process player move.
-
-    // Since everything is an integer, we need to do some special case around zero when 
-    // the mouse is off the grid.
+    // Process input.
     int grid_mouse_state_x = (mouse_state->x - game_state->grid_outer_padding);
     int grid_mouse_state_y = (mouse_state->y - game_state->grid_outer_padding);
     if (grid_mouse_state_x > 0) {
@@ -310,7 +306,16 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     // On left click, select the hovered tile.
     if (game_state->hovered->active && mouse_state->pressed == SDL_BUTTON_LEFT) {
         if (game_state->selected->active) {
-            // TODO(bkaylor): Swap the tiles.
+            // Swap the tiles.
+            Symbol temp = game_state->grid[game_state->hovered->x][game_state->hovered->y];
+            game_state->grid[game_state->hovered->x][game_state->hovered->y] = game_state->grid[game_state->selected->x][game_state->selected->y];
+            game_state->grid[game_state->selected->x][game_state->selected->y] = temp;
+
+            game_state->selected->active = 0;
+            game_state->selected->symbol = NULL;
+
+            // State has changed- look for matches again.
+            game_state->need_to_look_for_matches = 1;
         } else {
             game_state->selected->active = 1;
             game_state->selected->x = game_state->hovered->x;
@@ -345,9 +350,10 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
             }
         }
 
-        // TODO(bkaylor): Pop symbols when match.
-        // When a match is found, the three symbols should be popped and the pieces above should move down,
-        // and any new needed symbols to keep the grid to GRID_X * GRID_Y should be generated.
+        // TODO(bkaylor): When a match is found, the three symbols should be popped and the pieces above should move down,
+        // and any new needed symbols to keep the grid to GRID_X * GRID_Y should be generated at the top of the board.
+        // (Currently, a new symbol is just generated wherever the previous one was popped.
+        // TODO(bkaylor): It seems like some matches are being double-counted toward score.
         for (int i = 0; i < GRID_X; i++)
         {
             for (int j = 0; j < GRID_Y; j++)
@@ -363,6 +369,25 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     }
 #endif 
 
+    for (int i = 0; i < GRID_X; i++)
+    {
+        for (int j = 0; j < GRID_Y; j++)
+        {
+            if (game_state->grid[i][j].popped) {
+                game_state->grid[i][j].color = rand() % 5; 
+                game_state->grid[i][j].shape = rand() % 1;
+                game_state->grid[i][j].position.x = i;
+                game_state->grid[i][j].position.y = j;
+                game_state->grid[i][j].matched = 0;
+                game_state->grid[i][j].popped = 0;
+                game_state->grid[i][j].hovered = 0;
+                game_state->grid[i][j].selected = 0;
+
+                game_state->need_to_look_for_matches = 1;
+            }
+        }
+    }
+
     // Reset the board if the timer is up.
     if (game_state->timer < 0) {
         game_state->reset = 1;
@@ -371,7 +396,6 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     return 0;
 }
 
-// TODO(bkaylor): Mouse input
 void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_state)
 {
     // Get mouse info.
@@ -438,7 +462,7 @@ int main(int argc, char *argv[])
 	SDL_Window *win = SDL_CreateWindow("Match3",
 			SDL_WINDOWPOS_CENTERED,
 			SDL_WINDOWPOS_CENTERED,
-			400, 400,
+			800, 600,
 			SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
 
 	// Setup renderer

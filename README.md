@@ -1,7 +1,7 @@
 ## Match 3
 A match 3 game.
 
-![Match 3 game gif 1](assets/chess.gif?raw=true "Match 3 gif")
+![Match 3 game gif 1](assets/match3_example.gif?raw=true "Match 3 gif")
 
 ## Usage
 `run.bat`

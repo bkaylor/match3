@@ -11,6 +11,7 @@
 #define GRID_Y 5
 #define RESET_SECONDS 30
 #define POP_TIMER_SECONDS 0.5
+#define SYMBOL_PADDING 2
 
 // TODO(bkaylor): Shapes?
 typedef enum {
@@ -72,6 +73,7 @@ typedef struct {
     int symbol_height;
     int grid_outer_padding;
     int board_count;
+    int pressing_magic_key;
 } Game_State;
 
 void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *font, SDL_Color font_color) {
@@ -130,8 +132,14 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
             rect.x = i * rect.w + game_state->grid_outer_padding;
             rect.y = j * rect.h + game_state->grid_outer_padding;
 
+            SDL_Rect symbol_rect;
+            symbol_rect.x = rect.x + SYMBOL_PADDING;
+            symbol_rect.y = rect.y + SYMBOL_PADDING;
+            symbol_rect.w = rect.w - SYMBOL_PADDING;
+            symbol_rect.h = rect.h - SYMBOL_PADDING;
+
             // Draw the rect.
-            SDL_RenderFillRect(renderer, &rect);
+            SDL_RenderFillRect(renderer, &symbol_rect);
 
         }
     }
@@ -145,9 +153,6 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
     char hovered_line_2_string[20];
     if (game_state->hovered->active) {
         sprintf(hovered_string, "%d, %d hovered", game_state->hovered->x, game_state->hovered->y);
-
-        Symbol *hovered = &game_state->grid[game_state->hovered->x][game_state->hovered->y];
-        sprintf(hovered_line_2_string, "m%d, pi%d, po%d, t%d", hovered->matched, hovered->popping, hovered->popped, hovered->pop_timer);
     } else {
         sprintf(hovered_string, "nothing hovered");
     }
@@ -160,11 +165,11 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
         sprintf(selected_string, "nothing selected");
     }
 
-    draw_text(renderer, 5, 5, score_string, font, font_color);
-    draw_text(renderer, 5, 15, timer_string, font, font_color);
-    draw_text(renderer, 5, 25, hovered_string, font, font_color);
-    draw_text(renderer, 5, 35, hovered_line_2_string, font, font_color);
-    draw_text(renderer, 5, 45, selected_string, font, font_color);
+    int x = 5, y = -5;
+    draw_text(renderer, x, y+=10, score_string, font, font_color);
+    draw_text(renderer, x, y+=10, timer_string, font, font_color);
+    draw_text(renderer, x, y+=10, hovered_string, font, font_color);
+    draw_text(renderer, x, y+=10, selected_string, font, font_color);
 
     // Show
     SDL_RenderPresent(renderer);
@@ -195,7 +200,7 @@ void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_
         int j = starting_position.y + y_increment;
 
         while ((i < GRID_X) && (j < GRID_Y) && (i >= 0) && (j >= 0) && 
-               (!grid[i][j].popped) &&
+               // (!grid[i][j].popped) &&
                (grid[i][j].color == grid[starting_position.x][starting_position.y].color)) {
             match_length++;
 
@@ -267,7 +272,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     }
 
     // Get sizes of board.
-    game_state->grid_outer_padding = 60;
+    game_state->grid_outer_padding = 80;
     game_state->symbol_width = (game_state->window_w - 2*game_state->grid_outer_padding) / GRID_X; 
     game_state->symbol_height = (game_state->window_h - 2*game_state->grid_outer_padding) / GRID_Y;
 
@@ -344,16 +349,21 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     }
 
     // Check for matches.
+    if (game_state->pressing_magic_key) {
+        printf("!!!break here!!!\n");
+    }
+
     if (game_state->need_to_look_for_matches) {
         for (int i = 0; i < GRID_X; i++)
         {
             for (int j = 0; j < GRID_Y; j++)
             {
                 if (!game_state->grid[i][j].matched) {
-                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, 1);
-                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 0, -1);
-                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, -1, 0);
-                    check_direction_for_matches(game_state->grid, game_state->grid[i][j].position, 1, 0);
+                    Position position = {i, j};
+                    check_direction_for_matches(game_state->grid, position, 0, 1);
+                    check_direction_for_matches(game_state->grid, position, 0, -1);
+                    check_direction_for_matches(game_state->grid, position, -1, 0);
+                    check_direction_for_matches(game_state->grid, position, 1, 0);
                 }
             }
         }
@@ -389,6 +399,10 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                 int k = j;
                 while (k > 0) {
                     game_state->grid[i][k] = game_state->grid[i][k-1];
+
+                    Position temp_position = game_state->grid[i][k].position;
+                    game_state->grid[i][k].position = game_state->grid[i][k-1].position; 
+                    game_state->grid[i][k-1].position = temp_position;
                     k -= 1;
                 }
 
@@ -415,6 +429,8 @@ void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_sta
     // Handle events.
     SDL_Event event;
 
+    game_state->pressing_magic_key = 0;
+
     while (SDL_PollEvent(&event))
     {
         switch (event.type)
@@ -428,6 +444,10 @@ void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_sta
 
                     case SDLK_r:
                         game_state->reset = 1;
+                        break;
+
+                    case SDLK_g:
+                        game_state->pressing_magic_key = 1;
                         break;
 
                     default:

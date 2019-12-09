@@ -7,11 +7,11 @@
 
 #define internal static
 
-// TODO(bkaylor): Grid size and timer should be selectable.
+// TODO(bkaylor): Grid size and timer should be selectable via an options menu.
 #define GRID_X 6
 #define GRID_Y 5
-#define RESET_SECONDS 300
-#define POP_TIMER_SECONDS 0.5
+#define RESET_SECONDS 30
+#define POP_TIMER_SECONDS 0.3
 #define SYMBOL_PADDING 2
 #define MOVE_SECONDS 0.3
 #define SWAP_SECONDS 0.3
@@ -27,7 +27,7 @@ typedef enum {
     RECTANGLE = 0
 } Shape;
 
-// TODO(bkaylor): Auto-generate the colors based on color theory.
+// TODO(bkaylor): Auto-generate a color scheme?
 typedef enum {
     GREEN = 0,
     YELLOW = 1,
@@ -145,37 +145,64 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
 
             // if (symbol.popped) { continue; }
 
+            SDL_Color tile_color;
+
             if (symbol.color == GREEN) {
-                SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+                tile_color.r = 0; 
+                tile_color.g = 255; 
+                tile_color.b = 0;
             } else if (symbol.color == YELLOW) {
-                SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
+                tile_color.r = 255; 
+                tile_color.g = 255; 
+                tile_color.b = 0;
             } else if (symbol.color == RED){
-                SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
+                tile_color.r = 255; 
+                tile_color.g = 0; 
+                tile_color.b = 0;
             } else if (symbol.color == BLUE) {
-                SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
+                tile_color.r = 0; 
+                tile_color.g = 0; 
+                tile_color.b = 255;
             } else if (symbol.color == PURPLE) {
-                SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
+                tile_color.r = 255; 
+                tile_color.g = 0; 
+                tile_color.b = 255;
             }
 
 #ifdef NICE_COLORS
             // r g b (255)
             if (symbol.color == GREEN) {
-                SDL_SetRenderDrawColor(renderer, 64, 97, 69, 255);
+                tile_color.r = 64; 
+                tile_color.g = 97; 
+                tile_color.b = 69;
             } else if (symbol.color == YELLOW) {
-                SDL_SetRenderDrawColor(renderer, 221, 193, 117, 255);
+                tile_color.r = 221; 
+                tile_color.g = 193; 
+                tile_color.b = 117;
             } else if (symbol.color == RED){
-                SDL_SetRenderDrawColor(renderer, 212, 98, 117, 255);
+                tile_color.r = 212; 
+                tile_color.g = 98; 
+                tile_color.b = 117;
             } else if (symbol.color == BLUE) {
-                SDL_SetRenderDrawColor(renderer, 60, 120, 255, 255);
+                tile_color.r = 60; 
+                tile_color.g = 120; 
+                tile_color.b = 255;
             } else if (symbol.color == PURPLE) {
-                SDL_SetRenderDrawColor(renderer, 180, 98, 191, 255);
+                tile_color.r = 180; 
+                tile_color.g = 98; 
+                tile_color.b = 191;
             }
 #endif
 
             // Draw popping symbols as white.
             if (game_state->grid[i][j].popping) {
                 SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                tile_color.r = 200;
+                tile_color.g = 200;
+                tile_color.b = 200;
             }
+
+            SDL_SetRenderDrawColor(renderer, tile_color.r, tile_color.g, tile_color.b, 255);
 
             // TODO(bkaylor): When animating some swapping tiles, the selected tile in the swap should always be on top.
             // Animation.
@@ -285,6 +312,8 @@ internal void initialize_symbol(Symbol *symbol, int i, int j)
     // symbol->animation = {0};
 }
 
+// TODO(bkaylor): Other match3 games have special effects when you make a long or interesting match.
+// TODO(bkaylor): Add notes about the different Bejewled special effects.
 Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position starting_position, int x_increment, int y_increment)
 {
     int match_found = 0;
@@ -296,7 +325,7 @@ Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position sta
         int j = starting_position.y + y_increment;
 
         while ((i < GRID_X) && (j < GRID_Y) && (i >= 0) && (j >= 0) && 
-               // (!grid[i][j].popped) &&
+               (!grid[i][j].popped) &&
                (grid[i][j].color == grid[starting_position.x][starting_position.y].color)) {
             match_length++;
 
@@ -422,15 +451,15 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     // TODO(bkaylor): You shouldn't be able to just move tiles to an adjacent space. Moves should only 
     //                be valid when they result in a match, and the game moves your piece back on invalid swap.
     // TODO(bkaylor): Try clicking and dragging control scheme instead of left click to select and left click to swap.
-    // TODO(bkaylor): You shouldn't be able to swap with yourself.
-    // TODO(bkaylor): You shouldn't be able to swap diagonally.
     {
         Selection_Info *hovered = game_state->hovered;
         Selection_Info *selected = game_state->selected;
         if (hovered->active && mouse_state->pressed == SDL_BUTTON_LEFT) {
             if (selected->active) {
-                if ((hovered->x == selected->x || hovered->x == selected->x-1 || hovered->x == selected->x+1) &&
-                    (hovered->y == selected->y || hovered->y == selected->y-1 || hovered->y == selected->y+1)) {
+                if ((hovered->x == selected->x && hovered->y == selected->y-1) ||
+                    (hovered->x == selected->x && hovered->y == selected->y+1) ||
+                    (hovered->x == selected->x-1 && hovered->y == selected->y) ||
+                    (hovered->x == selected->x+1 && hovered->y == selected->y)) { 
                     // Swap the tiles.
                     Symbol temp = game_state->grid[hovered->x][hovered->y];
                     game_state->grid[hovered->x][hovered->y] = game_state->grid[selected->x][selected->y];

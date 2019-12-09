@@ -5,6 +5,8 @@
 #include "SDL_ttf.h"
 #include "SDL_image.h"
 
+#define internal static
+
 // TODO(bkaylor): Grid size and timer should be selectable.
 #define GRID_X 6
 #define GRID_Y 5
@@ -104,14 +106,14 @@ typedef struct {
     int board_count;
 } Game_State;
 
-void load_textures(SDL_Renderer *renderer) 
+internal void load_textures(SDL_Renderer *renderer) 
 {
     SDL_Surface *surface = IMG_Load("../assets/crosshair.png");
     SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
     crosshair_texture = texture;
 }
 
-void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *font, SDL_Color font_color) {
+internal void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *font, SDL_Color font_color) {
     SDL_Surface *surface = TTF_RenderText_Solid(font, string, font_color);
     SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
     int x_from_texture, y_from_texture;
@@ -119,9 +121,12 @@ void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *fon
     SDL_Rect rect = {x, y, x_from_texture, y_from_texture};
 
     SDL_RenderCopy(renderer, texture, NULL, &rect);
+
+    SDL_FreeSurface(surface);
+    SDL_DestroyTexture(texture);
 }
 
-void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_Color font_color)
+internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_Color font_color)
 {
     SDL_RenderClear(renderer);
 
@@ -264,7 +269,7 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
     SDL_RenderPresent(renderer);
 }
 
-void initialize_symbol(Symbol *symbol, int i, int j)
+internal void initialize_symbol(Symbol *symbol, int i, int j)
 {
     symbol->color = rand() % 5; 
     symbol->shape = rand() % 1;
@@ -588,7 +593,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     return 0;
 }
 
-void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_state)
+internal void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_state)
 {
     // Get mouse info.
     mouse_state->pressed = 0;
@@ -710,6 +715,13 @@ int main(int argc, char *argv[])
             // Update timers.
             frame_time_finish = SDL_GetTicks();
             delta_t = frame_time_finish - frame_time_start;
+
+            // Cap at 60ish
+            int delta_t_difference = 16 - delta_t; 
+            if (delta_t_difference > 0) {
+                SDL_Delay(delta_t_difference);
+                delta_t += delta_t_difference;
+            }
 
             game_state.timer -= delta_t; 
 

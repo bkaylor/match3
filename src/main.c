@@ -5,13 +5,20 @@
 #include "SDL_ttf.h"
 #include "SDL_image.h"
 
-
 // TODO(bkaylor): Grid size and timer should be selectable.
 #define GRID_X 6
 #define GRID_Y 5
-#define RESET_SECONDS 30
+#define RESET_SECONDS 300
 #define POP_TIMER_SECONDS 0.5
 #define SYMBOL_PADDING 2
+#define MOVE_SECONDS 0.3
+#define SWAP_SECONDS 0.3
+
+// #define DEBUG
+#define NICE_COLORS
+
+// Global textures for now.
+SDL_Texture *crosshair_texture;
 
 // TODO(bkaylor): Shapes?
 typedef enum {
@@ -32,6 +39,22 @@ typedef struct {
     int y;
 } Position;
 
+typedef enum {
+    UP = 0,
+    DOWN = 1,
+    LEFT = 2,
+    RIGHT = 3
+} Direction;
+
+typedef struct {
+    int is_moving;
+    int is_starting_from_top;
+    Direction direction;
+    int timer;
+    int timer_initial_value;
+    int should_be_drawn_on_top;
+} Animation_Info;
+
 typedef struct {
     Shape shape;
     Color color;
@@ -42,6 +65,7 @@ typedef struct {
     int selected;
     int popping;
     int pop_timer;
+    Animation_Info animation;
 } Symbol;
 
 typedef struct {
@@ -56,6 +80,11 @@ typedef struct {
     int active;
     Symbol *symbol;
 } Selection_Info;
+
+typedef struct {
+    Symbol *starting_at;
+    int length;
+} Match_Record;
 
 typedef struct {
     Symbol grid[GRID_X][GRID_Y];
@@ -73,8 +102,14 @@ typedef struct {
     int symbol_height;
     int grid_outer_padding;
     int board_count;
-    int pressing_magic_key;
 } Game_State;
+
+void load_textures(SDL_Renderer *renderer) 
+{
+    SDL_Surface *surface = IMG_Load("../assets/crosshair.png");
+    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
+    crosshair_texture = texture;
+}
 
 void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *font, SDL_Color font_color) {
     SDL_Surface *surface = TTF_RenderText_Solid(font, string, font_color);
@@ -86,12 +121,6 @@ void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *fon
     SDL_RenderCopy(renderer, texture, NULL, &rect);
 }
 
-// Given the window's width and height are w and h.
-// We want 50 px padding in all directions.
-// The grid rect is w-100 by h-100.
-// Bottom left corner is 50, 50. Top right corner is w-50, h-50.
-// Each rectangle in the grid is w-100/GRID_X, h-100/GRID_Y.
-// This assumes that the shapes are touching, flush against each other (might want to add padding later).
 void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_Color font_color)
 {
     SDL_RenderClear(renderer);
@@ -111,7 +140,6 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
 
             // if (symbol.popped) { continue; }
 
-            // r g b (255)
             if (symbol.color == GREEN) {
                 SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
             } else if (symbol.color == YELLOW) {
@@ -124,13 +152,64 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
                 SDL_SetRenderDrawColor(renderer, 255, 0, 255, 255);
             }
 
+#ifdef NICE_COLORS
+            // r g b (255)
+            if (symbol.color == GREEN) {
+                SDL_SetRenderDrawColor(renderer, 64, 97, 69, 255);
+            } else if (symbol.color == YELLOW) {
+                SDL_SetRenderDrawColor(renderer, 221, 193, 117, 255);
+            } else if (symbol.color == RED){
+                SDL_SetRenderDrawColor(renderer, 212, 98, 117, 255);
+            } else if (symbol.color == BLUE) {
+                SDL_SetRenderDrawColor(renderer, 60, 120, 255, 255);
+            } else if (symbol.color == PURPLE) {
+                SDL_SetRenderDrawColor(renderer, 180, 98, 191, 255);
+            }
+#endif
+
             // Draw popping symbols as white.
             if (game_state->grid[i][j].popping) {
                 SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
             }
 
-            rect.x = i * rect.w + game_state->grid_outer_padding;
-            rect.y = j * rect.h + game_state->grid_outer_padding;
+            // TODO(bkaylor): When animating some swapping tiles, the selected tile in the swap should always be on top.
+            // Animation.
+            int x_adjustment = 0, y_adjustment = 0;
+            if (game_state->grid[i][j].animation.is_moving) {
+                int adjustment_factor_x = 0, adjustment_factor_y = 0;
+                if (game_state->grid[i][j].animation.is_starting_from_top) {
+                    adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.w;
+                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.h * j;
+                } else {
+                    adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.w;
+                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.h;
+                }
+
+                switch (game_state->grid[i][j].animation.direction) {
+                    case UP:
+                        y_adjustment -= adjustment_factor_y;
+                    break;
+
+                    case DOWN:
+                        y_adjustment += adjustment_factor_y;
+                    break;
+
+                    case LEFT:
+                        x_adjustment -= adjustment_factor_x;
+                    break;
+
+                    case RIGHT:
+                        x_adjustment += adjustment_factor_x;
+                    break;
+
+                    default:
+                    break;
+                }
+            }
+
+            // TODO(bkaylor): For big grids (100 x 100), padding is uneven.
+            rect.x = i * rect.w + game_state->grid_outer_padding + x_adjustment;
+            rect.y = j * rect.h + game_state->grid_outer_padding + y_adjustment;
 
             SDL_Rect symbol_rect;
             symbol_rect.x = rect.x + SYMBOL_PADDING;
@@ -141,6 +220,10 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
             // Draw the rect.
             SDL_RenderFillRect(renderer, &symbol_rect);
 
+            // Draw crosshair on selected symbol.
+            if (game_state->grid[i][j].selected) {
+                SDL_RenderCopy(renderer, crosshair_texture, NULL, &symbol_rect);
+            }
         }
     }
 
@@ -148,7 +231,9 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
     char score_string[20];
     sprintf(score_string, "%dpts (%d last)", game_state->score, game_state->last_score);
     char timer_string[10];
-    sprintf(timer_string, "%dms", game_state->timer);
+    sprintf(timer_string, "%ds", game_state->timer / 1000);
+
+#ifdef DEBUG
     char hovered_string[20];
     char hovered_line_2_string[20];
     if (game_state->hovered->active) {
@@ -164,12 +249,16 @@ void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *font, SDL_
     } else {
         sprintf(selected_string, "nothing selected");
     }
+#endif
 
     int x = 5, y = -5;
     draw_text(renderer, x, y+=10, score_string, font, font_color);
     draw_text(renderer, x, y+=10, timer_string, font, font_color);
+
+#ifdef DEBUG
     draw_text(renderer, x, y+=10, hovered_string, font, font_color);
     draw_text(renderer, x, y+=10, selected_string, font, font_color);
+#endif
 
     // Show
     SDL_RenderPresent(renderer);
@@ -187,9 +276,11 @@ void initialize_symbol(Symbol *symbol, int i, int j)
     symbol->pop_timer = 0;
     symbol->hovered = 0;
     symbol->selected = 0;
+
+    // symbol->animation = {0};
 }
 
-void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_position, int x_increment, int y_increment)
+Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position starting_position, int x_increment, int y_increment)
 {
     int match_found = 0;
     int match_length = 1;
@@ -214,14 +305,14 @@ void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_
     }
 
     // Build the list of matched symbols.
-    // TODO(bkaylor): What should the size of the match_list array actually be?
-    Symbol *match_list[10];
+    // TODO(bkaylor): What should the size of the matched_symbols_list array actually be? Whatever the maximum match is.
+    Symbol *matched_symbols_list[10];
     if (match_found) {
         int i = starting_position.x;
         int j = starting_position.y;
         int k = 0;
         while (k < match_length) {
-            match_list[k] = &grid[i][j];
+            matched_symbols_list[k] = &grid[i][j];
 
             grid[i][j].matched = 1;
 
@@ -231,14 +322,22 @@ void check_direction_for_matches(Symbol grid[GRID_X][GRID_Y], Position starting_
         }
     }
 
+#ifdef DEBUG
     if (match_found) {
         printf("match of length %d at (%d,%d)\n", match_length, starting_position.x, starting_position.y);
         for (int k = 0; k < match_length; k++)
         {
-            printf("(%d,%d) ", match_list[k]->position.x, match_list[k]->position.y);
+            printf("(%d,%d) ", matched_symbols_list[k]->position.x, matched_symbols_list[k]->position.y);
         }
         printf("\n");
     }
+#endif
+
+    Match_Record match;
+    match.starting_at = &grid[starting_position.x][starting_position.y];
+    match.length = match_length;
+
+    return match;
 }
 
 int update(Game_State *game_state, Mouse_State *mouse_state) 
@@ -246,21 +345,31 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     // Reset the board if needed.
     if (game_state->reset) {
         game_state->board_count++;
+
+#ifdef DEBUG
         printf("**********\n");
         printf("Board %d\n", game_state->board_count);
+#endif
+
         for (int i = 0; i < GRID_X; i++)
         {
             for (int j = 0; j < GRID_Y; j++)
             {
                 initialize_symbol(&game_state->grid[i][j], i, j);
+#ifdef DEBUG
                 printf("%d ", game_state->grid[i][j].color);
+#endif
             }
 
+#ifdef DEBUG
             printf("\n");
+#endif
         }
 
+#ifdef DEBUG
         printf("**********\n");
         printf("\n");
+#endif
 
         game_state->timer = RESET_SECONDS * 1000;
         game_state->reset = 0;
@@ -306,53 +415,82 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
 
     // On left click, select the hovered tile.
     // TODO(bkaylor): You shouldn't be able to just move tiles to an adjacent space. Moves should only 
-    //                be valid when they result in a match.
+    //                be valid when they result in a match, and the game moves your piece back on invalid swap.
     // TODO(bkaylor): Try clicking and dragging control scheme instead of left click to select and left click to swap.
-    if (game_state->hovered->active && mouse_state->pressed == SDL_BUTTON_LEFT) {
-        if (game_state->selected->active) {
-            if ((game_state->hovered->x == game_state->selected->x || 
-                 game_state->hovered->x == game_state->selected->x-1 || 
-                 game_state->hovered->x == game_state->selected->x+1) &&
-                (game_state->hovered->y == game_state->selected->y || 
-                 game_state->hovered->y == game_state->selected->y-1 || 
-                 game_state->hovered->y == game_state->selected->y+1)) {
-                // Swap the tiles.
-                Symbol temp = game_state->grid[game_state->hovered->x][game_state->hovered->y];
-                game_state->grid[game_state->hovered->x][game_state->hovered->y] = game_state->grid[game_state->selected->x][game_state->selected->y];
-                game_state->grid[game_state->selected->x][game_state->selected->y] = temp;
+    // TODO(bkaylor): You shouldn't be able to swap with yourself.
+    // TODO(bkaylor): You shouldn't be able to swap diagonally.
+    {
+        Selection_Info *hovered = game_state->hovered;
+        Selection_Info *selected = game_state->selected;
+        if (hovered->active && mouse_state->pressed == SDL_BUTTON_LEFT) {
+            if (selected->active) {
+                if ((hovered->x == selected->x || hovered->x == selected->x-1 || hovered->x == selected->x+1) &&
+                    (hovered->y == selected->y || hovered->y == selected->y-1 || hovered->y == selected->y+1)) {
+                    // Swap the tiles.
+                    Symbol temp = game_state->grid[hovered->x][hovered->y];
+                    game_state->grid[hovered->x][hovered->y] = game_state->grid[selected->x][selected->y];
+                    game_state->grid[selected->x][selected->y] = temp;
 
-                Position temp_position = game_state->grid[game_state->hovered->x][game_state->hovered->y].position;
-                game_state->grid[game_state->hovered->x][game_state->hovered->y].position = game_state->grid[game_state->selected->x][game_state->selected->y].position; 
-                game_state->grid[game_state->selected->x][game_state->selected->y].position = temp_position;
+                    Position temp_position = game_state->grid[hovered->x][hovered->y].position;
+                    game_state->grid[hovered->x][hovered->y].position = game_state->grid[selected->x][selected->y].position; 
+                    game_state->grid[selected->x][selected->y].position = temp_position;
 
-                game_state->selected->active = 0;
-                game_state->selected->symbol = NULL;
+                    // Setup swap animation.
+                    Direction move_direction_of_selected;
+                    Direction move_direction_of_hovered;
+                    if (selected->x - hovered->x > 0) {
+                        move_direction_of_selected = LEFT;
+                        move_direction_of_hovered = RIGHT;
+                    } else if (selected->x - hovered->x < 0) {
+                        move_direction_of_selected = RIGHT;
+                        move_direction_of_hovered = LEFT;
+                    } else if (selected->y - hovered->y > 0) {
+                        move_direction_of_selected = UP;
+                        move_direction_of_hovered = DOWN;
+                    } else if (selected->y - hovered->y < 0) {
+                        move_direction_of_selected = DOWN;
+                        move_direction_of_hovered = UP;
+                    }
 
-                // State has changed- look for matches again.
-                game_state->need_to_look_for_matches = 1;
+                    // Set animation state of moving tiles.
+                    hovered->symbol->animation.is_moving = 1;
+                    hovered->symbol->animation.direction = move_direction_of_hovered;
+                    hovered->symbol->animation.timer = 1000 * SWAP_SECONDS;
+                    hovered->symbol->animation.timer_initial_value = hovered->symbol->animation.timer;
+
+                    selected->symbol->animation.is_moving = 1;
+                    selected->symbol->animation.direction = move_direction_of_selected;
+                    selected->symbol->animation.timer = 1000 * SWAP_SECONDS;
+                    selected->symbol->animation.timer_initial_value = selected->symbol->animation.timer;
+                    selected->symbol->animation.should_be_drawn_on_top = 1;
+
+                    // Remove selection.
+                    hovered->symbol->selected = 0;
+
+                    selected->active = 0;
+                    selected->symbol->selected = 0;
+                    selected->symbol = NULL;
+                }
+            } else {
+                selected->active = 1;
+                selected->x = hovered->x;
+                selected->y = hovered->y;
+                selected->symbol = hovered->symbol;
+                selected->symbol->selected = 1;
             }
-        } else {
-            game_state->selected->active = 1;
-            game_state->selected->x = game_state->hovered->x;
-            game_state->selected->y = game_state->hovered->y;
-            game_state->selected->symbol = game_state->hovered->symbol;
-            game_state->selected->symbol->selected = 1;
         }
-    }
 
-    // On right click, unselect.
-    if (game_state->selected->active && mouse_state->pressed == SDL_BUTTON_RIGHT) {
-        if (game_state->selected->active) {
-            game_state->selected->active = 0;
-            game_state->selected->symbol = NULL;
+        // On right click, unselect.
+        if (selected->active && mouse_state->pressed == SDL_BUTTON_RIGHT) {
+            if (selected->active) {
+                selected->active = 0;
+                selected->symbol->selected = 0;
+                selected->symbol = NULL;
+            }
         }
     }
 
     // Check for matches.
-    if (game_state->pressing_magic_key) {
-        printf("!!!break here!!!\n");
-    }
-
     if (game_state->need_to_look_for_matches) {
         for (int i = 0; i < GRID_X; i++)
         {
@@ -360,10 +498,10 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
             {
                 if (!game_state->grid[i][j].matched) {
                     Position position = {i, j};
-                    check_direction_for_matches(game_state->grid, position, 0, 1);
-                    check_direction_for_matches(game_state->grid, position, 0, -1);
-                    check_direction_for_matches(game_state->grid, position, -1, 0);
-                    check_direction_for_matches(game_state->grid, position, 1, 0);
+                    check_direction_for_match(game_state->grid, position, 0, 1);
+                    check_direction_for_match(game_state->grid, position, 0, -1);
+                    check_direction_for_match(game_state->grid, position, -1, 0);
+                    check_direction_for_match(game_state->grid, position, 1, 0);
                 }
             }
         }
@@ -371,12 +509,13 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
         game_state->need_to_look_for_matches = 0;
     }
 
-    // TODO(bkaylor): Popped, matched, popping, etc should be a state enum.
+    // TODO(bkaylor): Should popped, matched, popping, etc be a state enum?
+    // Handle any popped tiles.
     for (int i = 0; i < GRID_X; i++)
     {
         for (int j = 0; j < GRID_Y; j++)
         {
-            if (game_state->grid[i][j].matched && !game_state->grid[i][j].popped) {
+            if (game_state->grid[i][j].matched && !game_state->grid[i][j].popped && !game_state->grid[i][j].animation.is_moving) {
                 if (game_state->grid[i][j].popping) {
                     if (game_state->grid[i][j].pop_timer <= 0) {
                         game_state->grid[i][j].popped = 1;
@@ -403,10 +542,39 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                     Position temp_position = game_state->grid[i][k].position;
                     game_state->grid[i][k].position = game_state->grid[i][k-1].position; 
                     game_state->grid[i][k-1].position = temp_position;
+
+                    // Set the symbol to move downwards.
+                    game_state->grid[i][k].animation.is_moving = 1;
+                    game_state->grid[i][k].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
+                    game_state->grid[i][k].animation.timer = 1000 * MOVE_SECONDS;
+                    game_state->grid[i][k].animation.timer_initial_value = game_state->grid[i][k].animation.timer; 
+
                     k -= 1;
                 }
 
                 initialize_symbol(&game_state->grid[i][0], i, 0);
+                game_state->grid[i][0].animation.is_moving = 1;
+                game_state->grid[i][0].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
+                game_state->grid[i][0].animation.timer = 1000 * MOVE_SECONDS;
+                game_state->grid[i][0].animation.timer_initial_value = game_state->grid[i][0].animation.timer; 
+                game_state->grid[i][0].animation.is_starting_from_top = 1;
+
+                game_state->need_to_look_for_matches = 1;
+            }
+        }
+    }
+
+    // Cleanup animation state.
+    for (int i = 0; i < GRID_X; i++)
+    {
+        for (int j = 0; j < GRID_Y; j++)
+        {
+            Symbol *symbol = &game_state->grid[i][j];
+            if (symbol->animation.is_moving && symbol->animation.timer <= 0) {
+                symbol->animation.is_moving = 0;
+                symbol->animation.is_starting_from_top = 0;
+
+                // State has changed- look for matches again.
                 game_state->need_to_look_for_matches = 1;
             }
         }
@@ -429,8 +597,6 @@ void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_sta
     // Handle events.
     SDL_Event event;
 
-    game_state->pressing_magic_key = 0;
-
     while (SDL_PollEvent(&event))
     {
         switch (event.type)
@@ -444,10 +610,6 @@ void get_input(SDL_Renderer *ren, Game_State *game_state, Mouse_State *mouse_sta
 
                     case SDLK_r:
                         game_state->reset = 1;
-                        break;
-
-                    case SDLK_g:
-                        game_state->pressing_magic_key = 1;
                         break;
 
                     default:
@@ -524,6 +686,9 @@ int main(int argc, char *argv[])
 
     Mouse_State mouse_state = {0};
 
+    // Load images.
+    load_textures(ren);
+
     // Main loop
     const float FPS_INTERVAL = 1.0f;
     Uint64 frame_time_start, frame_time_finish, delta_t;
@@ -555,6 +720,10 @@ int main(int argc, char *argv[])
                 {
                     if (game_state.grid[i][j].popping) {
                         game_state.grid[i][j].pop_timer -= delta_t;
+                    }
+
+                    if (game_state.grid[i][j].animation.is_moving) {
+                        game_state.grid[i][j].animation.timer -= delta_t;
                     }
                 }
             }

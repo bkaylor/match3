@@ -10,14 +10,13 @@
 // TODO(bkaylor): Grid size and timer should be selectable via an options menu.
 #define GRID_X 6
 #define GRID_Y 5
-#define RESET_SECONDS 30
-#define POP_TIMER_SECONDS 0.3
 #define SYMBOL_PADDING 2
+#define RESET_SECONDS 30
+#define POP_SECONDS 0.4
 #define MOVE_SECONDS 0.3
 #define SWAP_SECONDS 0.3
 
 // #define DEBUG
-#define NICE_COLORS
 
 // Global textures for now.
 SDL_Texture *crosshair_texture;
@@ -134,8 +133,6 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderFillRect(renderer, NULL);
     SDL_Rect rect;
-    rect.w = game_state->symbol_width;
-    rect.h = game_state->symbol_height;
 
     for (int i = 0; i < GRID_X; i++)
     {
@@ -145,8 +142,12 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
 
             // if (symbol.popped) { continue; }
 
+            rect.w = game_state->symbol_width;
+            rect.h = game_state->symbol_height;
+
             SDL_Color tile_color;
 
+#if 0
             if (symbol.color == GREEN) {
                 tile_color.r = 0; 
                 tile_color.g = 255; 
@@ -168,9 +169,9 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
                 tile_color.g = 0; 
                 tile_color.b = 255;
             }
+#endif
 
-#ifdef NICE_COLORS
-            // r g b (255)
+            // These are nicer colors.
             if (symbol.color == GREEN) {
                 tile_color.r = 64; 
                 tile_color.g = 97; 
@@ -192,14 +193,27 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
                 tile_color.g = 98; 
                 tile_color.b = 191;
             }
-#endif
+
+            int delta_width = 0, delta_height = 0;
 
             // Draw popping symbols as white.
             if (game_state->grid[i][j].popping) {
-                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                /*
                 tile_color.r = 200;
                 tile_color.g = 200;
                 tile_color.b = 200;
+                */
+
+                float percent_through_popping = (float)game_state->grid[i][j].pop_timer / (POP_SECONDS * 1000);
+
+                int new_width = rect.w * percent_through_popping;
+                int new_height = rect.h * percent_through_popping;
+
+                delta_width = rect.w - new_width; 
+                delta_height = rect.h - new_height;
+
+                rect.w = new_width;
+                rect.h = new_width;
             }
 
             SDL_SetRenderDrawColor(renderer, tile_color.r, tile_color.g, tile_color.b, 255);
@@ -210,11 +224,11 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             if (game_state->grid[i][j].animation.is_moving) {
                 int adjustment_factor_x = 0, adjustment_factor_y = 0;
                 if (game_state->grid[i][j].animation.is_starting_from_top) {
-                    adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.w;
-                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.h * j;
+                    adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_width;
+                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_height * j;
                 } else {
-                    adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.w;
-                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * rect.h;
+                    adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_width;
+                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_height;
                 }
 
                 switch (game_state->grid[i][j].animation.direction) {
@@ -240,12 +254,12 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             }
 
             // TODO(bkaylor): For big grids (100 x 100), padding is uneven.
-            rect.x = i * rect.w + game_state->grid_outer_padding + x_adjustment;
-            rect.y = j * rect.h + game_state->grid_outer_padding + y_adjustment;
+            rect.x = i * game_state->symbol_width + game_state->grid_outer_padding + x_adjustment;
+            rect.y = j * game_state->symbol_height + game_state->grid_outer_padding + y_adjustment;
 
             SDL_Rect symbol_rect;
-            symbol_rect.x = rect.x + SYMBOL_PADDING;
-            symbol_rect.y = rect.y + SYMBOL_PADDING;
+            symbol_rect.x = rect.x + (delta_width/2) + SYMBOL_PADDING;
+            symbol_rect.y = rect.y + (delta_height/2) + SYMBOL_PADDING;
             symbol_rect.w = rect.w - SYMBOL_PADDING;
             symbol_rect.h = rect.h - SYMBOL_PADDING;
 
@@ -325,7 +339,7 @@ Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position sta
         int j = starting_position.y + y_increment;
 
         while ((i < GRID_X) && (j < GRID_Y) && (i >= 0) && (j >= 0) && 
-               (!grid[i][j].popped) &&
+               (!grid[i][j].matched) &&
                (grid[i][j].color == grid[starting_position.x][starting_position.y].color)) {
             match_length++;
 
@@ -558,7 +572,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                     }
                 } else {
                     game_state->grid[i][j].popping = 1;
-                    game_state->grid[i][j].pop_timer = POP_TIMER_SECONDS * 1000;
+                    game_state->grid[i][j].pop_timer = POP_SECONDS * 1000;
                 }
             }
         }

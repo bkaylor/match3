@@ -12,11 +12,12 @@
 #define GRID_Y 5
 #define SYMBOL_PADDING 2
 #define RESET_SECONDS 30
-#define POP_SECONDS 0.4
+#define POP_SECONDS 0.5
 #define MOVE_SECONDS 0.3
 #define SWAP_SECONDS 0.3
 
 // #define DEBUG
+// #define CAP_FRAMERATE
 
 // Global textures for now.
 SDL_Texture *crosshair_texture;
@@ -147,30 +148,6 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
 
             SDL_Color tile_color;
 
-#if 0
-            if (symbol.color == GREEN) {
-                tile_color.r = 0; 
-                tile_color.g = 255; 
-                tile_color.b = 0;
-            } else if (symbol.color == YELLOW) {
-                tile_color.r = 255; 
-                tile_color.g = 255; 
-                tile_color.b = 0;
-            } else if (symbol.color == RED){
-                tile_color.r = 255; 
-                tile_color.g = 0; 
-                tile_color.b = 0;
-            } else if (symbol.color == BLUE) {
-                tile_color.r = 0; 
-                tile_color.g = 0; 
-                tile_color.b = 255;
-            } else if (symbol.color == PURPLE) {
-                tile_color.r = 255; 
-                tile_color.g = 0; 
-                tile_color.b = 255;
-            }
-#endif
-
             // These are nicer colors.
             if (symbol.color == GREEN) {
                 tile_color.r = 64; 
@@ -198,12 +175,6 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
 
             // Draw popping symbols as white.
             if (game_state->grid[i][j].popping) {
-                /*
-                tile_color.r = 200;
-                tile_color.g = 200;
-                tile_color.b = 200;
-                */
-
                 float percent_through_popping = (float)game_state->grid[i][j].pop_timer / (POP_SECONDS * 1000);
 
                 int new_width = rect.w * percent_through_popping;
@@ -213,7 +184,7 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
                 delta_height = rect.h - new_height;
 
                 rect.w = new_width;
-                rect.h = new_width;
+                rect.h = new_height;
             }
 
             SDL_SetRenderDrawColor(renderer, tile_color.r, tile_color.g, tile_color.b, 255);
@@ -558,6 +529,8 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
     }
 
     // TODO(bkaylor): Should popped, matched, popping, etc be a state enum?
+    // TODO(bkaylor): Stacks of popped tiles "teleport" the top tile to the bottom of the stack,
+    //                instead of sliding down evenly.
     // Handle any popped tiles.
     for (int i = 0; i < GRID_X; i++)
     {
@@ -723,14 +696,16 @@ int main(int argc, char *argv[])
     srand(time(NULL));
 
     // Build game state
+    Game_State game_state = {0};
+    /*
+    game_state.quit = 0;
+    game_state.board_count = 0;
+    */
     Selection_Info hovered = {0};
     Selection_Info selected = {0};
-    Game_State game_state = {0};
     game_state.hovered = &hovered;
     game_state.selected = &selected;
     game_state.reset = 1;
-    game_state.quit = 0;
-    game_state.board_count = 0;
 
     Mouse_State mouse_state = {0};
 
@@ -755,20 +730,21 @@ int main(int argc, char *argv[])
             update(&game_state, &mouse_state);
             render(ren, &game_state, font, font_color);
 
-            // Update timers.
             frame_time_finish = SDL_GetTicks();
             delta_t = frame_time_finish - frame_time_start;
 
+#ifdef CAP_FRAMERATE
             // Cap at 60ish
             int delta_t_difference = 16 - delta_t; 
             if (delta_t_difference > 0) {
                 SDL_Delay(delta_t_difference);
                 delta_t += delta_t_difference;
             }
+#endif 
 
+            // Update timers.
             game_state.timer -= delta_t; 
 
-            // TODO(bkaylor): It doesn't feel good to do this here.
             for (int i = 0; i < GRID_X; i++)
             {
                 for (int j = 0; j < GRID_Y; j++)

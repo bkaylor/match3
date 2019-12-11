@@ -84,7 +84,8 @@ typedef struct {
 } Selection_Info;
 
 typedef struct {
-    Symbol *starting_at;
+    Position position;
+    Direction direction;
     int length;
 } Match_Record;
 
@@ -297,12 +298,90 @@ internal void initialize_symbol(Symbol *symbol, int i, int j)
     // symbol->animation = {0};
 }
 
+void apply_match_to_grid_state(Symbol grid[GRID_X][GRID_Y], Match_Record match_record)
+{
+    int x_increment = 0, y_increment = 0;
+    switch (match_record.direction) {
+        case UP:
+            x_increment = 0;
+            y_increment = 1;
+        break;
+        case DOWN:
+            x_increment = 0;
+            y_increment = -1;
+        break;
+        case LEFT:
+            x_increment = -1;
+            y_increment = 0;
+        break;
+        case RIGHT:
+            x_increment = 1;
+            y_increment = 0;
+        break;
+        default:
+            x_increment = 0;
+            y_increment = 0;
+        break;
+    }
+
+    // Build the list of matched symbols.
+    // TODO(bkaylor): What should the size of the matched_symbols_list array actually be? Whatever the maximum match is.
+    Symbol *matched_symbols_list[10];
+    int i = match_record.position.x;
+    int j = match_record.position.y;
+    int k = 0;
+    while (k < match_record.length) {
+        matched_symbols_list[k] = &grid[i][j];
+
+        grid[i][j].matched = 1;
+
+        i += x_increment;
+        j += y_increment;
+        k++;
+    }
+
+#ifdef DEBUG
+    printf("match of length %d at (%d,%d)\n", match_length, starting_position.x, starting_position.y);
+    for (int k = 0; k < match_length; k++)
+    {
+        printf("(%d,%d) ", matched_symbols_list[k]->position.x, matched_symbols_list[k]->position.y);
+    }
+    printf("\n");
+#endif
+}
+
 // TODO(bkaylor): Other match3 games have special effects when you make a long or interesting match.
 // TODO(bkaylor): Add notes about the different Bejewled special effects.
-Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position starting_position, int x_increment, int y_increment)
+// TODO(bkaylor): This used to mark the symbols as matched, and then it wouldn't re-match the same
+//                symbols from the opposite direction. This might happen now. How to avoid this? 
+Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position starting_position, Direction direction)
 {
     int match_found = 0;
     int match_length = 1;
+
+    int x_increment = 0, y_increment = 0;
+    switch (direction) {
+        case UP:
+            x_increment = 0;
+            y_increment = 1;
+        break;
+        case DOWN:
+            x_increment = 0;
+            y_increment = -1;
+        break;
+        case LEFT:
+            x_increment = -1;
+            y_increment = 0;
+        break;
+        case RIGHT:
+            x_increment = 1;
+            y_increment = 0;
+        break;
+        default:
+            x_increment = 0;
+            y_increment = 0;
+        break;
+    }
 
     // Find length match in the (x_increment, y_increment) direction.
     {
@@ -323,38 +402,10 @@ Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position sta
         }
     }
 
-    // Build the list of matched symbols.
-    // TODO(bkaylor): What should the size of the matched_symbols_list array actually be? Whatever the maximum match is.
-    Symbol *matched_symbols_list[10];
-    if (match_found) {
-        int i = starting_position.x;
-        int j = starting_position.y;
-        int k = 0;
-        while (k < match_length) {
-            matched_symbols_list[k] = &grid[i][j];
-
-            grid[i][j].matched = 1;
-
-            i += x_increment;
-            j += y_increment;
-            k++;
-        }
-    }
-
-#ifdef DEBUG
-    if (match_found) {
-        printf("match of length %d at (%d,%d)\n", match_length, starting_position.x, starting_position.y);
-        for (int k = 0; k < match_length; k++)
-        {
-            printf("(%d,%d) ", matched_symbols_list[k]->position.x, matched_symbols_list[k]->position.y);
-        }
-        printf("\n");
-    }
-#endif
-
     Match_Record match;
-    match.starting_at = &grid[starting_position.x][starting_position.y];
+    match.position = grid[starting_position.x][starting_position.y].position;
     match.length = match_length;
+    match.direction = direction;
 
     return match;
 }
@@ -432,6 +483,9 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
         game_state->hovered->symbol = NULL;
     }
 
+    Match_Record matches[GRID_X*GRID_Y/3]; // TODO(bkaylor): What size should this be?
+    int match_count = 0;
+
     // On left click, select the hovered tile.
     // TODO(bkaylor): You shouldn't be able to just move tiles to an adjacent space. Moves should only 
     //                be valid when they result in a match, and the game moves your piece back on invalid swap.
@@ -441,10 +495,10 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
         Selection_Info *selected = game_state->selected;
         if (hovered->active && mouse_state->pressed == SDL_BUTTON_LEFT) {
             if (selected->active) {
-                if ((hovered->x == selected->x && hovered->y == selected->y-1) ||
-                    (hovered->x == selected->x && hovered->y == selected->y+1) ||
-                    (hovered->x == selected->x-1 && hovered->y == selected->y) ||
-                    (hovered->x == selected->x+1 && hovered->y == selected->y)) { 
+                if ((hovered->x == selected->x && hovered->y == selected->y-1) || (hovered->x == selected->x && hovered->y == selected->y+1) ||
+                    (hovered->x == selected->x-1 && hovered->y == selected->y) || (hovered->x == selected->x+1 && hovered->y == selected->y)) { 
+                    // TODO(bkaylor): Check if the move will result in a new match.
+ 
                     // Swap the tiles.
                     Symbol temp = game_state->grid[hovered->x][hovered->y];
                     game_state->grid[hovered->x][hovered->y] = game_state->grid[selected->x][selected->y];
@@ -453,6 +507,51 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                     Position temp_position = game_state->grid[hovered->x][hovered->y].position;
                     game_state->grid[hovered->x][hovered->y].position = game_state->grid[selected->x][selected->y].position; 
                     game_state->grid[selected->x][selected->y].position = temp_position;
+
+                    // Check if there is a new match in the grid.
+                    for (int i = 0; i < GRID_X; i++)
+                    {
+                        for (int j = 0; j < GRID_Y; j++)
+                        {
+                            if (!game_state->grid[i][j].matched) {
+                                Position position = {i, j};
+                                Match_Record match_up = check_direction_for_match(game_state->grid, position, UP);
+                                Match_Record match_down = check_direction_for_match(game_state->grid, position, DOWN);
+                                Match_Record match_left = check_direction_for_match(game_state->grid, position, LEFT);
+                                Match_Record match_right = check_direction_for_match(game_state->grid, position, RIGHT);
+
+                                if (match_up.length >= 3) {
+                                    matches[match_count] = match_up;
+                                    ++match_count;
+                                }
+                                if (match_down.length >= 3) {
+                                    matches[match_count] = match_down;
+                                    ++match_count;
+                                }
+                                if (match_left.length >= 3) {
+                                    matches[match_count] = match_left;
+                                    ++match_count;
+                                }
+                                if (match_right.length >= 3) {
+                                    matches[match_count] = match_right;
+                                    ++match_count;
+                                }
+                            }
+                        }
+                    }
+
+                    game_state->need_to_look_for_matches = 0;
+
+                    // Swap back.
+                    if (match_count == 0) {
+                        Symbol temp = game_state->grid[hovered->x][hovered->y];
+                        game_state->grid[hovered->x][hovered->y] = game_state->grid[selected->x][selected->y];
+                        game_state->grid[selected->x][selected->y] = temp;
+
+                        Position temp_position = game_state->grid[hovered->x][hovered->y].position;
+                        game_state->grid[hovered->x][hovered->y].position = game_state->grid[selected->x][selected->y].position; 
+                        game_state->grid[selected->x][selected->y].position = temp_position;
+                    }
 
                     // Setup swap animation.
                     Direction move_direction_of_selected;
@@ -517,10 +616,27 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
             {
                 if (!game_state->grid[i][j].matched) {
                     Position position = {i, j};
-                    check_direction_for_match(game_state->grid, position, 0, 1);
-                    check_direction_for_match(game_state->grid, position, 0, -1);
-                    check_direction_for_match(game_state->grid, position, -1, 0);
-                    check_direction_for_match(game_state->grid, position, 1, 0);
+                    Match_Record match_up = check_direction_for_match(game_state->grid, position, UP);
+                    Match_Record match_down = check_direction_for_match(game_state->grid, position, DOWN);
+                    Match_Record match_left = check_direction_for_match(game_state->grid, position, LEFT);
+                    Match_Record match_right = check_direction_for_match(game_state->grid, position, RIGHT);
+
+                    if (match_up.length >= 3) {
+                        matches[match_count] = match_up;
+                        ++match_count;
+                    }
+                    if (match_down.length >= 3) {
+                        matches[match_count] = match_down;
+                        ++match_count;
+                    }
+                    if (match_left.length >= 3) {
+                        matches[match_count] = match_left;
+                        ++match_count;
+                    }
+                    if (match_right.length >= 3) {
+                        matches[match_count] = match_right;
+                        ++match_count;
+                    }
                 }
             }
         }
@@ -528,9 +644,17 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
         game_state->need_to_look_for_matches = 0;
     }
 
+    // Apply matches.
+    if (match_count > 0) {
+        for (int k = 0; k < match_count; ++k)
+        {
+            apply_match_to_grid_state(game_state->grid, matches[k]);
+        }
+    }
+
     // TODO(bkaylor): Should popped, matched, popping, etc be a state enum?
     // TODO(bkaylor): Stacks of popped tiles "teleport" the top tile to the bottom of the stack,
-    //                instead of sliding down evenly.
+    //                instead of sliding down evenly. Fix this.
     // Handle any popped tiles.
     for (int i = 0; i < GRID_X; i++)
     {
@@ -697,10 +821,6 @@ int main(int argc, char *argv[])
 
     // Build game state
     Game_State game_state = {0};
-    /*
-    game_state.quit = 0;
-    game_state.board_count = 0;
-    */
     Selection_Info hovered = {0};
     Selection_Info selected = {0};
     game_state.hovered = &hovered;

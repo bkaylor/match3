@@ -8,13 +8,16 @@
 #define internal static
 
 // TODO(bkaylor): Grid size and timer should be selectable via an options menu.
-#define GRID_X 6
+// TODO(bkaylor): Sometimes, immediately on trying to load a thin grids, we get crashes.
+#define GRID_X 1
 #define GRID_Y 5
 #define SYMBOL_PADDING 2
 #define RESET_SECONDS 30
 #define POP_SECONDS 0.5
 #define MOVE_SECONDS 0.3
 #define SWAP_SECONDS 0.3
+#define NUMBER_OF_COLORS 2
+#define NUMBER_OF_SHAPES 1
 
 // #define DEBUG
 // #define CAP_FRAMERATE
@@ -69,6 +72,7 @@ typedef struct {
     int timer;
     int timer_initial_value;
     int should_be_drawn_on_top;
+    int move_distance;
     Direction direction;
 } Animation;
 
@@ -215,10 +219,10 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
                 int adjustment_factor_x = 0, adjustment_factor_y = 0;
                 if (game_state->grid[i][j].animation.animation_type == SPAWN) {
                     adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_width;
-                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_height * j;
+                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_height * game_state->grid[i][j].animation.move_distance;
                 } else if (game_state->grid[i][j].animation.animation_type == MOVE) {
                     adjustment_factor_x = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_width;
-                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_height;
+                    adjustment_factor_y = ((float)game_state->grid[i][j].animation.timer / (game_state->grid[i][j].animation.timer_initial_value)) * game_state->symbol_height * game_state->grid[i][j].animation.move_distance;
                 }
 
                 switch (game_state->grid[i][j].animation.direction) {
@@ -302,7 +306,7 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
 
 internal void initialize_symbol(Symbol *symbol, int i, int j)
 {
-    symbol->color = rand() % 5; 
+    symbol->color = rand() % NUMBER_OF_COLORS; 
     symbol->shape = rand() % 1;
     symbol->position.x = i;
     symbol->position.y = j;
@@ -403,6 +407,7 @@ Match_Record check_direction_for_match(Symbol grid[GRID_X][GRID_Y], Position sta
 
         while ((i < GRID_X) && (j < GRID_Y) && (i >= 0) && (j >= 0) && 
                (!grid[i][j].matched) &&
+               (grid[i][j].state == ACTIVE) &&
                (grid[i][j].color == grid[starting_position.x][starting_position.y].color)) {
             match_length++;
 
@@ -576,12 +581,14 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                         hovered->symbol->animation.direction = move_direction_of_hovered;
                         hovered->symbol->animation.timer = 1000 * SWAP_SECONDS;
                         hovered->symbol->animation.timer_initial_value = hovered->symbol->animation.timer;
+                        hovered->symbol->animation.move_distance = 1;
 
                         selected->symbol->animation.animation_type = FAILED_MOVE;
                         selected->symbol->animation.direction = move_direction_of_selected;
                         selected->symbol->animation.timer = 1000 * SWAP_SECONDS;
                         selected->symbol->animation.timer_initial_value = selected->symbol->animation.timer;
                         selected->symbol->animation.should_be_drawn_on_top = 1;
+                        selected->symbol->animation.move_distance = 1;
                     } else {
                         // Swap is valid.
                         // Set animation state of moving tiles.
@@ -589,12 +596,14 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                         hovered->symbol->animation.direction = move_direction_of_hovered;
                         hovered->symbol->animation.timer = 1000 * SWAP_SECONDS;
                         hovered->symbol->animation.timer_initial_value = hovered->symbol->animation.timer;
+                        hovered->symbol->animation.move_distance = 1;
 
                         selected->symbol->animation.animation_type = MOVE;
                         selected->symbol->animation.direction = move_direction_of_selected;
                         selected->symbol->animation.timer = 1000 * SWAP_SECONDS;
                         selected->symbol->animation.timer_initial_value = selected->symbol->animation.timer;
                         selected->symbol->animation.should_be_drawn_on_top = 1;
+                        selected->symbol->animation.move_distance = 1;
                     }
 
                     // Remove selection.
@@ -678,6 +687,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
         }
     }
 
+#if 0
     for (int i = 0; i < GRID_X; i++)
     {
         for (int j = 0; j < GRID_Y; j++)
@@ -694,12 +704,14 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                     // Set the symbol to move downwards.
                     game_state->grid[i][k].animation.animation_type = MOVE;
                     game_state->grid[i][k].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
-                    game_state->grid[i][k].animation.timer = 1000 * MOVE_SECONDS;// * (j-k);
+                    game_state->grid[i][k].animation.timer = 1000 * MOVE_SECONDS;
                     game_state->grid[i][k].animation.timer_initial_value = game_state->grid[i][k].animation.timer; 
+                    game_state->grid[i][k].animation.move_distance = 1;
 
                     k -= 1;
                 }
 
+                // Spawn new tiles at the top of the grid.
                 initialize_symbol(&game_state->grid[i][0], i, 0);
                 game_state->grid[i][0].animation.animation_type = SPAWN;
                 game_state->grid[i][0].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
@@ -708,6 +720,54 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
 
                 game_state->need_to_look_for_matches = 1;
             }
+        }
+    }
+#endif
+
+    // Check how many popped symbols are in each column.
+    for (int i = 0; i < GRID_X; i++)
+    {
+        int popped_count = 0;
+        int y_index_of_highest_symbol_popped = -1;
+
+        for (int j = GRID_Y; j >= 0; j--)
+        {
+            if (game_state->grid[i][j].state == POPPED) 
+            {
+                y_index_of_highest_symbol_popped = j;
+                popped_count++;
+            }
+        }
+
+        if (popped_count > 0)
+        {
+            // Move and set the animation state of the symbols above the popped region, from bottom to top.
+            for (int j = y_index_of_highest_symbol_popped - 1; j >= 0; j--)
+            {
+                int new_y_index = j+popped_count;
+                game_state->grid[i][new_y_index] = game_state->grid[i][j]; 
+                game_state->grid[i][new_y_index].position = (Position){i, new_y_index};
+
+                game_state->grid[i][new_y_index].animation.animation_type = MOVE;
+                game_state->grid[i][new_y_index].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
+                game_state->grid[i][new_y_index].animation.timer = 1000 * MOVE_SECONDS * popped_count;
+                game_state->grid[i][new_y_index].animation.timer_initial_value = game_state->grid[i][new_y_index].animation.timer; 
+                game_state->grid[i][new_y_index].animation.move_distance = popped_count;
+            }
+
+            // Spawn new tiles at the top of the column.
+            for (int k = 0; k < popped_count; k++)
+            {
+                initialize_symbol(&game_state->grid[i][0], i, 0);
+                game_state->grid[i][0].animation.animation_type = SPAWN;
+                game_state->grid[i][0].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
+                game_state->grid[i][0].animation.timer = 1000 * MOVE_SECONDS * popped_count-k;
+                game_state->grid[i][0].animation.timer_initial_value = game_state->grid[i][0].animation.timer; 
+                game_state->grid[i][0].animation.move_distance = popped_count-k;
+
+            }
+
+            game_state->need_to_look_for_matches = 1;
         }
     }
 

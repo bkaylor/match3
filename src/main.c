@@ -694,7 +694,7 @@ int update(Game_State *game_state, Mouse_State *mouse_state)
                     // Set the symbol to move downwards.
                     game_state->grid[i][k].animation.animation_type = MOVE;
                     game_state->grid[i][k].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
-                    game_state->grid[i][k].animation.timer = 1000 * MOVE_SECONDS * j;
+                    game_state->grid[i][k].animation.timer = 1000 * MOVE_SECONDS;// * (j-k);
                     game_state->grid[i][k].animation.timer_initial_value = game_state->grid[i][k].animation.timer; 
 
                     k -= 1;

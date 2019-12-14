@@ -9,14 +9,14 @@
 
 // TODO(bkaylor): Grid size and timer should be selectable via an options menu.
 // TODO(bkaylor): Sometimes, immediately on trying to load a thin grids, we get crashes.
-#define GRID_X 1
+#define GRID_X 2
 #define GRID_Y 4
 #define SYMBOL_PADDING 2
 #define RESET_SECONDS 30
 #define POP_SECONDS 0.5
 #define MOVE_SECONDS 0.3
 #define SWAP_SECONDS 0.3
-#define NUMBER_OF_COLORS 4
+#define NUMBER_OF_COLORS 1
 #define NUMBER_OF_SHAPES 1
 
 #define DEBUG
@@ -108,7 +108,6 @@ typedef struct {
 
 // TODO(bkaylor): Use bools.
 typedef struct {
-    Symbol grid[GRID_X][GRID_Y];
     Selection_Info *hovered;
     Selection_Info *selected;
     int reset;
@@ -125,6 +124,7 @@ typedef struct {
     int board_count;
     int pop_all;
     float game_speed_factor;
+    Symbol grid[GRID_X][GRID_Y];
 } Game_State;
 
 internal void load_textures(SDL_Renderer *renderer) 
@@ -280,12 +280,12 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
 
 #ifdef DEBUG 
             // Draw debug data on each square.
-            char symbol_string[40];
-            sprintf(symbol_string, "%dms / %dms (%f), type %d", game_state->grid[i][j].animation.timer, 
-                                                           game_state->grid[i][j].animation.timer_initial_value,
-                                                           percent_through_animation,
-                                                           game_state->grid[i][j].animation.animation_type);
+            char symbol_string[30];
+            char symbol_string_line_2[30];
+            sprintf(symbol_string, "%dms/%dms(%.3f)", game_state->grid[i][j].animation.timer, game_state->grid[i][j].animation.timer_initial_value, percent_through_animation, game_state->grid[i][j].animation.animation_type);
+            sprintf(symbol_string_line_2, "t%d,s%d", game_state->grid[i][j].animation.animation_type, game_state->grid[i][j].state);
             draw_text(renderer, symbol_rect.x, symbol_rect.y, symbol_string, font, font_color);
+            draw_text(renderer, symbol_rect.x, symbol_rect.y+10, symbol_string_line_2, font, font_color);
 #endif
 
             // Draw crosshair on selected symbol.
@@ -765,6 +765,7 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
                 game_state->grid[i][0].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
                 game_state->grid[i][0].animation.timer = 1000 * MOVE_SECONDS;
                 game_state->grid[i][0].animation.timer_initial_value = game_state->grid[i][0].animation.timer; 
+                game_state->grid[i][0].animation.move_distance = 3;
 
                 game_state->need_to_look_for_matches = 1;
             }
@@ -789,7 +790,7 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
         if (popped_count > 0)
         {
             // Move and set the animation state of the symbols above the popped region, from bottom to top.
-            for (int j = y_index_of_highest_symbol_popped - 1; j >= 0; j--)
+            for (int j = y_index_of_highest_symbol_popped-1; j >= 0; j--)
             {
                 int new_y_index = j+popped_count;
                 game_state->grid[i][new_y_index] = game_state->grid[i][j]; 
@@ -798,7 +799,7 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
                 game_state->grid[i][new_y_index].state = MOVING;
                 game_state->grid[i][new_y_index].animation.animation_type = MOVE;
                 game_state->grid[i][new_y_index].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
-                game_state->grid[i][new_y_index].animation.timer = 1000 * MOVE_SECONDS * (GRID_Y - popped_count);// * popped_count;
+                game_state->grid[i][new_y_index].animation.timer = 1000 * MOVE_SECONDS * popped_count;
                 game_state->grid[i][new_y_index].animation.timer_initial_value = game_state->grid[i][new_y_index].animation.timer; 
                 game_state->grid[i][new_y_index].animation.move_distance = popped_count;
             }
@@ -806,13 +807,14 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
             // Spawn new tiles at the top of the column.
             for (int k = 0; k < popped_count; k++)
             {
-                initialize_symbol(&game_state->grid[i][0], i, 0);
-                game_state->grid[i][0].state = MOVING;
-                game_state->grid[i][0].animation.animation_type = SPAWN;
-                game_state->grid[i][0].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
-                game_state->grid[i][0].animation.timer = 1000 * MOVE_SECONDS;// * (GRID_Y - popped_count);// * popped_count-k;
-                game_state->grid[i][0].animation.timer_initial_value = game_state->grid[i][0].animation.timer; 
-                game_state->grid[i][0].animation.move_distance = popped_count;
+                int new_y_index = k;
+                initialize_symbol(&game_state->grid[i][new_y_index], i, new_y_index);
+                game_state->grid[i][new_y_index].state = MOVING;
+                game_state->grid[i][new_y_index].animation.animation_type = SPAWN;
+                game_state->grid[i][new_y_index].animation.direction = UP; // TODO(bkaylor): Why up instead of down?
+                game_state->grid[i][new_y_index].animation.timer = 1000 * MOVE_SECONDS * popped_count;
+                game_state->grid[i][new_y_index].animation.timer_initial_value = game_state->grid[i][new_y_index].animation.timer; 
+                game_state->grid[i][new_y_index].animation.move_distance = popped_count;
 
             }
 

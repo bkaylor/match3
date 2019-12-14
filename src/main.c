@@ -288,6 +288,7 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             draw_text(renderer, symbol_rect.x, symbol_rect.y+10, symbol_string_line_2, font, font_color);
 #endif
 
+            // TODO(bkaylor): Do something better than the crosshair ...
             // Draw crosshair on selected symbol.
             if (game_state->grid[i][j].selected) {
                 SDL_RenderCopy(renderer, crosshair_texture, NULL, &symbol_rect);
@@ -776,7 +777,7 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
     }
 #endif
 #if 0
-    // TODO(bkaylor): Version 2 Broken
+    // TODO(bkaylor): Version 2 Broken: When a top-column match is done, this messes with the bottom symbol in the previous column.
     // Check how many popped symbols are in each column.
     for (int i = 0; i < GRID_X; i++)
     {

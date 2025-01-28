@@ -1,6 +1,9 @@
+
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <stdbool.h>
+
 #include "SDL.h"
 #include "SDL_ttf.h"
 #include "SDL_image.h"
@@ -10,21 +13,24 @@
 // TODO(bkaylor): There's still a bug somewhere where, what looks like it should be a match doesn't let you swap. 
 
 // TODO(bkaylor): Grid size and timer should be selectable via an options menu.
-#define GRID_X 6
+#define GRID_X 8
 #define GRID_Y 5
 #define SYMBOL_PADDING 2
-#define RESET_SECONDS 30
-#define POP_SECONDS 0.7
-#define MOVE_SECONDS 0.3
-#define SWAP_SECONDS 0.3
+#define RESET_SECONDS 60
+#define POP_SECONDS 0.2
+#define MOVE_SECONDS 0.1
+#define SWAP_SECONDS 0.1
 #define NUMBER_OF_COLORS 5
 #define NUMBER_OF_SHAPES 1
+#define SPRITE_X_MAX 6
+#define SPRITE_Y_MAX 6
 
 // #define DEBUG
 // #define CAP_FRAMERATE
 
 // Global textures for now.
 SDL_Texture *crosshair_texture;
+SDL_Texture *sheet_texture;
 
 // TODO(bkaylor): Shapes?
 typedef enum {
@@ -33,11 +39,11 @@ typedef enum {
 
 // TODO(bkaylor): Auto-generate a color scheme?
 typedef enum {
-    GREEN,
-    YELLOW,
-    RED,
-    BLUE,
-    PURPLE
+    GREEN  = 0,
+    YELLOW = 1,
+    RED    = 2,
+    BLUE   = 3,
+    PURPLE = 4
 } Color;
 
 typedef struct {
@@ -76,6 +82,14 @@ typedef struct {
     int move_distance;
     Direction direction;
 } Animation;
+
+typedef struct {
+    SDL_Color color;
+    int x;
+    int y;
+    int w;
+    int h;
+} Sprite;
 
 typedef struct {
     Symbol_State state;
@@ -126,13 +140,85 @@ typedef struct {
     int pop_all;
     float game_speed_factor;
     Symbol grid[GRID_X][GRID_Y];
+    Sprite sprites[5];
 } Game_State;
+
+SDL_Color hsl_to_rgb(float h, float s, float l) 
+{
+   SDL_Color rgb = {0, 0, 0, 255}; // Initialize with full alpha
+   
+   if (s == 0) {
+       rgb.r = rgb.g = rgb.b = (Uint8)(l * 255);
+       return rgb;
+   }
+
+   float q = l < 0.5f ? l * (1 + s) : l + s - l * s;
+   float p = 2 * l - q;
+
+   float hk = h / 360.0f;
+   float tr = hk + 1.0f/3.0f;
+   float tg = hk;
+   float tb = hk - 1.0f/3.0f;
+
+   // Adjust temporary values
+   if (tr > 1) tr -= 1;
+   if (tr < 0) tr += 1;
+   if (tg > 1) tg -= 1;
+   if (tg < 0) tg += 1;
+   if (tb > 1) tb -= 1;
+   if (tb < 0) tb += 1;
+
+   // Convert each component
+   float r = (tr < 1.0f/6.0f) ? p + (q - p) * 6 * tr :
+             (tr < 1.0f/2.0f) ? q :
+             (tr < 2.0f/3.0f) ? p + (q - p) * (2.0f/3.0f - tr) * 6 :
+             p;
+
+   float g = (tg < 1.0f/6.0f) ? p + (q - p) * 6 * tg :
+             (tg < 1.0f/2.0f) ? q :
+             (tg < 2.0f/3.0f) ? p + (q - p) * (2.0f/3.0f - tg) * 6 :
+             p;
+
+   float b = (tb < 1.0f/6.0f) ? p + (q - p) * 6 * tb :
+             (tb < 1.0f/2.0f) ? q :
+             (tb < 2.0f/3.0f) ? p + (q - p) * (2.0f/3.0f - tb) * 6 :
+             p;
+
+   rgb.r = (Uint8)(r * 255);
+   rgb.g = (Uint8)(g * 255);
+   rgb.b = (Uint8)(b * 255);
+   
+   return rgb;
+}
+
+// Easings
+float ease_in_quart(float x)
+{
+    return x*x*x*x;
+}
+
+float ease_out_quart(float x)
+{
+    return x*x*x*x;
+}
+
+float ease_in_out_elastic(float x)
+{
+    float c5 = (2.0f * 3.14159265f) / 4.5f;
+
+    return x == 0.0f ? 0.0f : 
+        (x == 1.0f ? 1.0f : 
+         (x < 0.5f ? (-powf(2, 20*x-10) * sinf(20*x-11.125f) * c5)/2.0f :
+         (-powf(2, -20*x+10) * sinf(20*x-11.125f) * c5)/2.0f + 1));
+}
 
 internal void load_textures(SDL_Renderer *renderer) 
 {
-    SDL_Surface *surface = IMG_Load("../assets/crosshair.png");
-    SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
-    crosshair_texture = texture;
+    SDL_Surface *crosshair_surface = IMG_Load("../assets/crosshair.png");
+    crosshair_texture = SDL_CreateTextureFromSurface(renderer, crosshair_surface);
+
+    SDL_Surface *sheet_surface = IMG_Load("../assets/runeGrey_tileOutline_sheet.png");
+    sheet_texture = SDL_CreateTextureFromSurface(renderer, sheet_surface);
 }
 
 internal void draw_text(SDL_Renderer *renderer, int x, int y, char *string, TTF_Font *font, SDL_Color font_color) {
@@ -197,9 +283,10 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             // Animate popping symbols as shrinking.
             if (symbol.state == POPPING) {
                 float percent_through_popping = (float)symbol.animation.timer / (POP_SECONDS * 1000);
+                float animation_factor = percent_through_popping; // ease_in_quart(percent_through_popping);
 
-                int new_width = rect.w * percent_through_popping;
-                int new_height = rect.h * percent_through_popping;
+                int new_width = rect.w * animation_factor;
+                int new_height = rect.h * animation_factor;
 
                 delta_width = rect.w - new_width; 
                 delta_height = rect.h - new_height;
@@ -229,22 +316,24 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             {
                 int adjustment_factor_x = 0, adjustment_factor_y = 0;
                 percent_through_animation = (float)symbol.animation.timer / (float)(symbol.animation.timer_initial_value);
+                float animation_factor = ease_in_quart(percent_through_animation);
+
                 int move_distance = symbol.animation.move_distance;
 
                 switch (symbol.animation.animation_type) 
                 {
                     case SPAWN:
-                        adjustment_factor_x = percent_through_animation * game_state->symbol_width;
-                        adjustment_factor_y = percent_through_animation * game_state->symbol_height * (move_distance + 1); 
+                        adjustment_factor_x = animation_factor * game_state->symbol_width;
+                        adjustment_factor_y = animation_factor * game_state->symbol_height * (move_distance + 1); 
                     break;
                     case MOVE:
-                        adjustment_factor_x = percent_through_animation * game_state->symbol_width;
-                        adjustment_factor_y = percent_through_animation * game_state->symbol_height * move_distance; 
+                        adjustment_factor_x = animation_factor * game_state->symbol_width;
+                        adjustment_factor_y = animation_factor * game_state->symbol_height * move_distance; 
                     break;
 
                     case FAILED_MOVE:
-                        adjustment_factor_x = percent_through_animation * (game_state->symbol_width/10);
-                        adjustment_factor_y = percent_through_animation * (game_state->symbol_height/10);
+                        adjustment_factor_x = animation_factor * (game_state->symbol_width/10);
+                        adjustment_factor_y = animation_factor * (game_state->symbol_height/10);
                     break;
 
                     default:
@@ -283,8 +372,18 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             symbol_rect.w = rect.w - SYMBOL_PADDING;
             symbol_rect.h = rect.h - SYMBOL_PADDING;
 
+            Sprite sprite = game_state->sprites[symbol.color];
+            SDL_Rect sheet_rect;
+            sheet_rect.x = sprite.x;
+            sheet_rect.y = sprite.y;
+            sheet_rect.w = sprite.w;
+            sheet_rect.h = sprite.h;
+
+            SDL_SetTextureColorMod(sheet_texture, sprite.color.r, sprite.color.g, sprite.color.b);
+                
             // Draw the rect.
-            SDL_RenderFillRect(renderer, &symbol_rect);
+            // SDL_RenderFillRect(renderer, &symbol_rect);
+            SDL_RenderCopy(renderer, sheet_texture, &sheet_rect, &symbol_rect);
 
 #ifdef DEBUG 
             // Draw debug data on each square.
@@ -299,7 +398,9 @@ internal void render(SDL_Renderer *renderer, Game_State *game_state, TTF_Font *f
             // TODO(bkaylor): Do something better than the crosshair ...
             // Draw crosshair on selected symbol.
             if (symbol.selected) {
-                SDL_RenderCopy(renderer, crosshair_texture, NULL, &symbol_rect);
+                // SDL_RenderCopy(renderer, crosshair_texture, NULL, &symbol_rect);
+                SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+                SDL_RenderDrawRect(renderer, &symbol_rect);
             }
         }
     }
@@ -507,12 +608,63 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
         game_state->need_to_look_for_matches = 1;
         game_state->hovered->active = 0;
         game_state->selected->active = 0;
+
+        // Generate sprites
+        float hue = (float)rand() / RAND_MAX;
+        float golden_ratio = 0.618033988749895f;
+
+        float saturation =  0.6f; // 0.5f + (((float)rand() / RAND_MAX)/2);
+        float lightness =  0.5f; // 0.4f + (((float)rand() / RAND_MAX)/5);
+
+        for (int i = 0; i < 5; i += 1)
+        {
+            int x = 0;
+            int y = 0;
+
+            bool sprite_is_unique = false;
+            while (!sprite_is_unique)
+            {
+                x = (rand() % SPRITE_X_MAX) * 54;
+                y = (rand() % SPRITE_Y_MAX) * 60;
+
+                sprite_is_unique = true;
+                for (int j = 0; j < i; j += 1)
+                {
+                    sprite_is_unique |= (game_state->sprites[j].x == x  && game_state->sprites[j].y == y);
+                }
+            }
+
+            game_state->sprites[i] = (Sprite){
+                .color = hsl_to_rgb(hue * 360.0f, saturation, lightness),
+                .x = x,
+                .y = y,
+                .w = 54,
+                .h = 60,
+            };
+
+            hue += golden_ratio;
+            hue = fmodf(hue, 1.0f);
+        }
     }
 
     // Get sizes of board.
     game_state->grid_outer_padding = 80;
-    game_state->symbol_width = (game_state->window_w - 2*game_state->grid_outer_padding) / GRID_X; 
-    game_state->symbol_height = (game_state->window_h - 2*game_state->grid_outer_padding) / GRID_Y;
+
+    int piece_w = 54;
+    int piece_h = 60;
+    int play_area_w = (piece_w * GRID_X) + (GRID_X-1 * SYMBOL_PADDING);
+    int play_area_h = (piece_h * GRID_Y) + (GRID_Y-1 * SYMBOL_PADDING);
+
+    // Now, we have a rectangle we want to center and fit into the window
+    int total_usable_window_w = game_state->window_w - 2*game_state->grid_outer_padding;
+    int total_usable_window_h = game_state->window_h - 2*game_state->grid_outer_padding;
+
+    // We have a play area rect and a window rect. Now, we want to center the play area in the window.
+    int play_area_x = ((total_usable_window_w-play_area_w) / 2); 
+    int play_area_y = ((total_usable_window_h-play_area_h) / 2); 
+
+    game_state->symbol_width = 54 * 1.5f;  // total_pixel_width / GRID_X; 
+    game_state->symbol_height = 60 * 1.5f; // total_pixel_height / GRID_Y;
 
     // Process input.
     int grid_mouse_state_x = (mouse_state->x - game_state->grid_outer_padding);

@@ -632,6 +632,11 @@ void update(Game_State *game_state, Mouse_State *mouse_state)
                 {
                     sprite_is_unique |= (game_state->sprites[j].x == x  && game_state->sprites[j].y == y);
                 }
+
+                if (x == 0 & y == 0)
+                {
+                    sprite_is_unique = false;
+                }
             }
 
             game_state->sprites[i] = (Sprite){
